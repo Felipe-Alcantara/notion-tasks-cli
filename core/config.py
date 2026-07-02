@@ -12,8 +12,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-#: Raiz do repositório (``server/core/config.py`` → sobe três níveis).
-REPO_RAIZ = Path(__file__).resolve().parents[2]
+#: Raiz do repositório (``core/config.py`` → sobe dois níveis).
+REPO_RAIZ = Path(__file__).resolve().parents[1]
 
 #: ``.env`` local opcional, no mesmo padrão usado por ``start_app.py``.
 ENV_FILE = REPO_RAIZ / ".env"
