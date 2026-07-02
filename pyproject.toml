@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notion-tasks-cli"
+version = "0.1.0"
+description = "CLI de tarefas do Notion pensado para IAs: um 'MCP via CLI' que permite a qualquer modelo criar, editar e mover tarefas no workspace."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Felipe Alcantara" }]
+keywords = ["notion", "cli", "mcp", "ai", "automation"]
+dependencies = [
+    "notion-starter @ git+https://github.com/Felipe-Alcantara/notion-starter.git",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "responses>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+notion-tasks = "cli.notion_tasks:main"
+
+[project.urls]
+Homepage = "https://github.com/Felipe-Alcantara/notion-tasks-cli"
+Repository = "https://github.com/Felipe-Alcantara/notion-tasks-cli"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["cli", "core", "integrations", "services"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
