@@ -795,7 +795,22 @@ def executar(
         return 2, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
 
 
+def _garantir_saida_utf8() -> None:
+    """Evita ``UnicodeEncodeError`` em consoles Windows (cp1252).
+
+    Páginas do Notion trazem setas, emojis e travessões que o cp1252 não
+    representa; reconfigura stdout/stderr para UTF-8 com substituição, para a
+    saída nunca derrubar o comando por causa de um caractere.
+    """
+
+    for fluxo in (sys.stdout, sys.stderr):
+        reconfigure = getattr(fluxo, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _garantir_saida_utf8()
     codigo, saida = executar(argv)
     if isinstance(saida, dict):
         print(_json(saida))
