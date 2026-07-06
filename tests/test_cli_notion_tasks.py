@@ -623,6 +623,23 @@ def test_guia_lista_todos_os_comandos():
     assert all(c["exemplos"] for c in saida["dados"]["comandos"])
 
 
+def test_guia_recomenda_propriedades_antes_do_conteudo():
+    codigo, saida = _executar(["--json", "guia"])
+    assert codigo == 0
+    fluxo = " ".join(saida["dados"]["fluxo_recomendado"]).lower()
+    assert "editar-linha" in fluxo and "escrever" in fluxo
+    # A ordem recomendada: propriedades (editar-linha) antes do conteúdo (escrever).
+    assert fluxo.index("editar-linha") < fluxo.index("escrever")
+    comandos = {c["comando"] for c in saida["dados"]["comandos"]}
+    assert "editar-linha" in comandos
+
+
+def test_guia_humano_mostra_fluxo_recomendado():
+    codigo, saida = _executar(["guia"])
+    assert codigo == 0
+    assert "editar-linha" in saida and "propriedades" in saida.lower()
+
+
 def test_guia_humano_tem_dica_de_uso():
     codigo, saida = _executar(["guia"])
     assert codigo == 0

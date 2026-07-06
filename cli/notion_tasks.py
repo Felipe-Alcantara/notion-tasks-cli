@@ -147,6 +147,9 @@ def _formatar_guia(dados: dict[str, Any]) -> str:
     """Renderiza o guia de comandos em texto legível."""
 
     linhas = [dados["ferramenta"], dados["dica"], ""]
+    for passo in dados.get("fluxo_recomendado", []):
+        linhas.append(f">> {passo}")
+    linhas.append("")
     for item in dados["comandos"]:
         linhas.append(f"{item['comando']:18} {item['descricao']}")
         for exemplo in item["exemplos"]:
@@ -620,10 +623,17 @@ def cmd_guia(args: argparse.Namespace) -> Any:
         "dica": (
             "Use estes comandos em vez de chamar a API do Notion na mão. "
             "Acrescente --json para saída estável {ok, dados}. Sufixo '--help' "
-            "em qualquer comando mostra os argumentos. Ao editar uma linha de "
-            "database, comece pelas propriedades (colunas) com 'editar-linha' e "
-            "só depois escreva o conteúdo (blocos) com 'escrever'."
+            "em qualquer comando mostra os argumentos."
         ),
+        "fluxo_recomendado": [
+            "REGRA: ao trabalhar numa página que é linha de um database, edite "
+            "PRIMEIRO as propriedades (as colunas) e SÓ DEPOIS o conteúdo (o corpo).",
+            "1. Propriedades (colunas: status, datas, seleções, relações…) → "
+            "'editar-linha <page_id> --set \"Nome=valor\"'.",
+            "2. Conteúdo (o corpo da nota, em blocos) → 'escrever <page_id> <markdown>'.",
+            "Não pare no conteúdo esquecendo as propriedades: uma linha de database "
+            "só fica completa quando as colunas também são preenchidas.",
+        ],
         "comandos": comandos,
     }
 
@@ -701,7 +711,8 @@ def construir_parser() -> argparse.ArgumentParser:
 
     editar_linha = sub.add_parser(
         "editar-linha",
-        help="edita propriedades (colunas) de uma linha de database",
+        help="edita propriedades (colunas) de uma linha de database — faça ISTO "
+        "antes de escrever o conteúdo",
     )
     editar_linha.add_argument("page_id")
     editar_linha.add_argument(
@@ -713,7 +724,11 @@ def construir_parser() -> argparse.ArgumentParser:
         "texto vazio limpa a coluna.",
     )
 
-    escrever = sub.add_parser("escrever", help="anexa conteúdo (Markdown) a uma página")
+    escrever = sub.add_parser(
+        "escrever",
+        help="anexa conteúdo (Markdown) a uma página — se for linha de database, "
+        "defina antes as propriedades com 'editar-linha'",
+    )
     escrever.add_argument("page_id")
     escrever.add_argument("conteudo", help="texto em Markdown a anexar")
 
