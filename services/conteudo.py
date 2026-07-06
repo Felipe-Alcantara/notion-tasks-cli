@@ -24,6 +24,11 @@ from notion_starter import (
     markdown_para_blocos,
 )
 
+# O Notion aceita no máximo 100 blocos filhos por requisição de append. O limite
+# de 2000 caracteres por item de rich_text já é tratado na lib (fatiamento em
+# ``content.py``); aqui cuidamos do limite de blocos por requisição.
+_MAX_BLOCOS_POR_REQUISICAO = 100
+
 
 def _cliente_padrao() -> NotionClient:
     """Resolve o :class:`NotionClient` a partir da configuração do servidor.
@@ -99,7 +104,12 @@ def escrever_conteudo(
     *,
     cliente: NotionClient | None = None,
 ) -> int:
-    """Anexa conteúdo (em Markdown) ao final de uma página.
+    """Anexa conteúdo (em Markdown) ao **final** de uma página.
+
+    O conteúdo já existente é preservado: os novos blocos entram depois dele. O
+    envio é feito em lotes de até 100 blocos (limite do Notion por requisição) e,
+    quando a API informa os blocos criados, confirma-se que a quantidade criada
+    bate com a enviada — assim uma escrita parcial não passa despercebida.
 
     Args:
         page_id: ID da página (ou bloco) que receberá o conteúdo.
@@ -111,12 +121,27 @@ def escrever_conteudo(
 
     Raises:
         ValueError: Se ``markdown`` não gerar nenhum bloco.
+        RuntimeError: Se a API criar menos blocos do que os enviados.
     """
 
     blocos = markdown_para_blocos(markdown)
     if not blocos:
         raise ValueError("O conteúdo está vazio — nada a escrever.")
-    (cliente or _cliente_padrao()).anexar_blocos(page_id, blocos)
+
+    cliente = cliente or _cliente_padrao()
+    criados = 0
+    for inicio in range(0, len(blocos), _MAX_BLOCOS_POR_REQUISICAO):
+        lote = blocos[inicio : inicio + _MAX_BLOCOS_POR_REQUISICAO]
+        resposta = cliente.anexar_blocos(page_id, lote)
+        criados += len(resposta.get("results", []) or []) if isinstance(resposta, dict) else 0
+
+    # Verificação pós-PATCH: se a API reportou os blocos criados, confirme que
+    # não houve escrita parcial. Clientes que não retornam ``results`` (ex.: em
+    # testes) informam 0 e a checagem é ignorada.
+    if criados and criados != len(blocos):
+        raise RuntimeError(
+            f"Escrita parcial: enviados {len(blocos)} blocos, mas a API criou {criados}."
+        )
     return len(blocos)
 
 
