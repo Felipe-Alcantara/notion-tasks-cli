@@ -212,6 +212,20 @@ class FakeClient:
                 alvo["properties"][nome]["status"]["options"] = novas
         return alvo
 
+    def obter_pagina(self, page_id):
+        self.chamadas.append(("obter_pagina", page_id))
+        return {
+            "id": page_id,
+            "properties": {
+                "Nome": {"type": "title", "title": []},
+                "Status": {"type": "status", "status": {"name": "Inbox"}},
+                "Prazo": {"type": "date", "date": None},
+                "Tags": {"type": "multi_select", "multi_select": []},
+                "Peso": {"type": "number", "number": None},
+                "Fórmula": {"type": "formula", "formula": {}},
+            },
+        }
+
     def atualizar_pagina(self, page_id, propriedades):
         self.chamadas.append(("atualizar_pagina", (page_id, propriedades)))
         return {"id": page_id, "properties": propriedades}
@@ -470,6 +484,61 @@ def test_escrever_anexa_blocos():
     assert codigo == 0
     assert saida["dados"]["blocos_anexados"] == 2
     assert any(c[0] == "anexar_blocos" for c in client.chamadas)
+
+
+def test_editar_linha_atualiza_propriedades_por_tipo():
+    client = FakeClient()
+    codigo, saida = _executar(
+        [
+            "--json",
+            "editar-linha",
+            "page1",
+            "--set",
+            "Status=Feito",
+            "--set",
+            "Tags=urgente,casa",
+            "--set",
+            "Peso=3",
+        ],
+        client=client,
+    )
+    assert codigo == 0
+    assert saida["dados"]["atualizadas"] == {
+        "Status": "status",
+        "Tags": "multi_select",
+        "Peso": "number",
+    }
+    enviados = [c[1][1] for c in client.chamadas if c[0] == "atualizar_pagina"][0]
+    assert enviados["Status"] == {"status": {"name": "Feito"}}
+    assert enviados["Tags"] == {"multi_select": [{"name": "urgente"}, {"name": "casa"}]}
+    assert enviados["Peso"] == {"number": 3}
+
+
+def test_editar_linha_propriedade_inexistente_erra():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "editar-linha", "page1", "--set", "Inexistente=x"], client=client
+    )
+    assert codigo == 2
+    assert not saida["ok"]
+    assert "Inexistente" in saida["erro"]["mensagem"]
+    assert not any(c[0] == "atualizar_pagina" for c in client.chamadas)
+
+
+def test_editar_linha_tipo_somente_leitura_erra():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "editar-linha", "page1", "--set", "Fórmula=x"], client=client
+    )
+    assert codigo == 2
+    assert "formula" in saida["erro"]["mensagem"]
+
+
+def test_editar_linha_sem_set_erra():
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "editar-linha", "page1"], client=client)
+    assert codigo == 2
+    assert not saida["ok"]
 
 
 def test_editar_bloco_atualiza():

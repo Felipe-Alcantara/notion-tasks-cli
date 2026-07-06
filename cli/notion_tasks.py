@@ -24,6 +24,7 @@ from services import clonagem as svc_clonagem  # noqa: E402
 from services import conteudo as svc_conteudo  # noqa: E402
 from services import inventario_github as svc_inventario  # noqa: E402
 from services import normalizacao as svc_normalizacao  # noqa: E402
+from services import propriedades as svc_propriedades  # noqa: E402
 from services import tarefas as svc  # noqa: E402
 
 from notion_starter import (  # noqa: E402
@@ -456,6 +457,29 @@ def cmd_linhas(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
     return {"id": database_id, "linhas": linhas}
 
 
+def _pares_set(itens: Sequence[str] | None) -> dict[str, str]:
+    """Converte ``["Nome=valor", ...]`` num mapa ``{Nome: valor}``.
+
+    Divide no primeiro ``=`` para o valor poder conter ``=``. O nome não pode
+    ficar vazio.
+    """
+
+    pares: dict[str, str] = {}
+    for item in itens or []:
+        nome, sep, valor = item.partition("=")
+        nome = nome.strip()
+        if not sep or not nome:
+            raise CLIError(f'Use o formato "Nome=valor" em --set (recebido: {item!r}).')
+        pares[nome] = valor
+    return pares
+
+
+def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    valores = _pares_set(args.set)
+    return svc_propriedades.editar_linha(page_id, valores, cliente=client_factory())
+
+
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _texto_obrigatorio(args.page_id, "page_id")
     conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
@@ -549,6 +573,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "buscar": ['python -m cli --json buscar "nota de reunião"'],
     "conteudo": ["python -m cli --json conteudo <page_id>"],
     "linhas": ["python -m cli --json linhas <database_id>"],
+    "editar-linha": [
+        'python -m cli --json editar-linha <page_id> --set "Status=Feito"',
+        'python -m cli --json editar-linha <page_id> --set "Prazo=2026-07-10" --set "Tags=urgente,casa"',
+    ],
     "escrever": ["python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'"],
     "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
     "apagar-bloco": ["python -m cli --json apagar-bloco <block_id> --sim"],
@@ -592,7 +620,9 @@ def cmd_guia(args: argparse.Namespace) -> Any:
         "dica": (
             "Use estes comandos em vez de chamar a API do Notion na mão. "
             "Acrescente --json para saída estável {ok, dados}. Sufixo '--help' "
-            "em qualquer comando mostra os argumentos."
+            "em qualquer comando mostra os argumentos. Ao editar uma linha de "
+            "database, comece pelas propriedades (colunas) com 'editar-linha' e "
+            "só depois escreva o conteúdo (blocos) com 'escrever'."
         ),
         "comandos": comandos,
     }
@@ -668,6 +698,20 @@ def construir_parser() -> argparse.ArgumentParser:
 
     linhas = sub.add_parser("linhas", help="lista as linhas de um database (resolve data sources)")
     linhas.add_argument("database_id")
+
+    editar_linha = sub.add_parser(
+        "editar-linha",
+        help="edita propriedades (colunas) de uma linha de database",
+    )
+    editar_linha.add_argument("page_id")
+    editar_linha.add_argument(
+        "--set",
+        action="append",
+        metavar="NOME=VALOR",
+        help='coluna a definir; repita para várias. Ex.: --set "Status=Feito" '
+        '--set "Prazo=2026-07-10". Listas (multi_select/relation) aceitam CSV; '
+        "texto vazio limpa a coluna.",
+    )
 
     escrever = sub.add_parser("escrever", help="anexa conteúdo (Markdown) a uma página")
     escrever.add_argument("page_id")
@@ -767,6 +811,8 @@ def executar(
             dados = cmd_conteudo(args, client_factory=client_factory)
         elif comando == "linhas":
             dados = cmd_linhas(args, client_factory=client_factory)
+        elif comando == "editar-linha":
+            dados = cmd_editar_linha(args, client_factory=client_factory)
         elif comando == "escrever":
             dados = cmd_escrever(args, client_factory=client_factory)
         elif comando == "editar-bloco":

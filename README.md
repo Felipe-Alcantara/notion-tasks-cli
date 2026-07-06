@@ -32,6 +32,7 @@ notion-tasks mapear              # resume o inventário do workspace
 notion-tasks buscar <termo>      # pesquisa páginas e databases
 notion-tasks databases           # lista databases visíveis
 notion-tasks linhas <id>         # lista as linhas de um database
+notion-tasks editar-linha <id> --set "Status=Feito"   # edita propriedades (colunas) de uma linha
 
 # Conteúdo de páginas
 notion-tasks conteudo <id>       # lê uma página como Markdown
