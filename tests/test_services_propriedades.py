@@ -102,3 +102,57 @@ def test_sem_valores_erra():
     client = _client(Titulo="title")
     with pytest.raises(ValueError):
         svc.editar_linha("pg", {}, cliente=client)
+
+
+# -- Modo append (acrescentar preservando o conteúdo atual) -----------------
+
+
+def _client_texto(nome, tipo, itens):
+    return FakeClient({nome: {"type": tipo, tipo: itens}})
+
+
+def test_append_preserva_itens_originais_e_acrescenta():
+    originais = [{"type": "text", "text": {"content": "início"}, "plain_text": "início"}]
+    client = _client_texto("Resumo", "rich_text", originais)
+    svc.editar_linha("pg", acrescentos={"Resumo": "\n\nfim"}, cliente=client)
+    itens = client.patch["Resumo"]["rich_text"]
+    # Item original preservado (sem os campos só-leitura) + o novo ao final.
+    assert itens[0] == {"type": "text", "text": {"content": "início"}}
+    assert itens[-1]["text"]["content"] == "\n\nfim"
+    assert "".join(i["text"]["content"] for i in itens) == "início\n\nfim"
+
+
+def test_append_fatia_texto_longo_em_2000():
+    client = _client_texto("Corpo", "rich_text", [])
+    svc.editar_linha("pg", acrescentos={"Corpo": "z" * 4500}, cliente=client)
+    itens = client.patch["Corpo"]["rich_text"]
+    assert [len(i["text"]["content"]) for i in itens] == [2000, 2000, 500]
+
+
+def test_append_em_coluna_nao_texto_erra():
+    client = _client(Tags="multi_select")
+    with pytest.raises(ValueError, match="title/rich_text"):
+        svc.editar_linha("pg", acrescentos={"Tags": "x"}, cliente=client)
+    assert client.patch is None
+
+
+def test_set_e_append_na_mesma_coluna_erra():
+    client = _client_texto("Resumo", "rich_text", [])
+    with pytest.raises(ValueError, match="ao mesmo tempo"):
+        svc.editar_linha(
+            "pg", {"Resumo": "a"}, {"Resumo": "b"}, cliente=client
+        )
+    assert client.patch is None
+
+
+def test_set_e_append_juntos_em_colunas_diferentes():
+    client = FakeClient(
+        {
+            "Status": {"type": "status", "status": {"name": "Inbox"}},
+            "Resumo": {"type": "rich_text", "rich_text": [{"type": "text", "text": {"content": "x"}}]},
+        }
+    )
+    r = svc.editar_linha("pg", {"Status": "Feito"}, {"Resumo": "y"}, cliente=client)
+    assert client.patch["Status"] == {"status": {"name": "Feito"}}
+    assert [i["text"]["content"] for i in client.patch["Resumo"]["rich_text"]] == ["x", "y"]
+    assert r["atualizadas"] == {"Status": "status", "Resumo": "rich_text (append)"}

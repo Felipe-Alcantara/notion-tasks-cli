@@ -460,11 +460,11 @@ def cmd_linhas(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
     return {"id": database_id, "linhas": linhas}
 
 
-def _pares_set(itens: Sequence[str] | None) -> dict[str, str]:
+def _pares_chave_valor(itens: Sequence[str] | None, flag: str) -> dict[str, str]:
     """Converte ``["Nome=valor", ...]`` num mapa ``{Nome: valor}``.
 
     Divide no primeiro ``=`` para o valor poder conter ``=``. O nome não pode
-    ficar vazio.
+    ficar vazio. ``flag`` é citada na mensagem de erro (ex.: ``--set``).
     """
 
     pares: dict[str, str] = {}
@@ -472,15 +472,18 @@ def _pares_set(itens: Sequence[str] | None) -> dict[str, str]:
         nome, sep, valor = item.partition("=")
         nome = nome.strip()
         if not sep or not nome:
-            raise CLIError(f'Use o formato "Nome=valor" em --set (recebido: {item!r}).')
+            raise CLIError(f'Use o formato "Nome=valor" em {flag} (recebido: {item!r}).')
         pares[nome] = valor
     return pares
 
 
 def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _texto_obrigatorio(args.page_id, "page_id")
-    valores = _pares_set(args.set)
-    return svc_propriedades.editar_linha(page_id, valores, cliente=client_factory())
+    valores = _pares_chave_valor(args.set, "--set")
+    acrescentos = _pares_chave_valor(args.append, "--append")
+    return svc_propriedades.editar_linha(
+        page_id, valores, acrescentos, cliente=client_factory()
+    )
 
 
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -579,6 +582,7 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "editar-linha": [
         'python -m cli --json editar-linha <page_id> --set "Status=Feito"',
         'python -m cli --json editar-linha <page_id> --set "Prazo=2026-07-10" --set "Tags=urgente,casa"',
+        'python -m cli --json editar-linha <page_id> --append "Resumo=\\n\\nNova observação ao final"',
     ],
     "escrever": ["python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'"],
     "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
@@ -719,9 +723,17 @@ def construir_parser() -> argparse.ArgumentParser:
         "--set",
         action="append",
         metavar="NOME=VALOR",
-        help='coluna a definir; repita para várias. Ex.: --set "Status=Feito" '
-        '--set "Prazo=2026-07-10". Listas (multi_select/relation) aceitam CSV; '
-        "texto vazio limpa a coluna.",
+        help='substitui o valor de uma coluna; repita para várias. Ex.: --set '
+        '"Status=Feito" --set "Prazo=2026-07-10". Listas (multi_select/relation) '
+        "aceitam CSV; texto vazio limpa a coluna.",
+    )
+    editar_linha.add_argument(
+        "--append",
+        action="append",
+        metavar="NOME=TEXTO",
+        help='acrescenta texto ao FINAL de uma coluna de texto (title/rich_text), '
+        'preservando o conteúdo atual. Ex.: --append "Resumo=\\n\\nMais uma nota". '
+        "Texto longo é fatiado automaticamente no limite de 2000.",
     )
 
     escrever = sub.add_parser(
