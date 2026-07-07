@@ -37,8 +37,12 @@ notion-tasks editar-linha <id> --append "Resumo=..."  # acrescenta ao final de c
 
 # Conteúdo de páginas
 notion-tasks conteudo <id>       # lê uma página como Markdown
-notion-tasks escrever <id>       # anexa Markdown a uma página
-notion-tasks editar-bloco <id>   # substitui o texto de um bloco
+notion-tasks blocos <id>         # lista os blocos com o ID de cada um (para editar/apagar)
+notion-tasks escrever <id>       # ANEXA Markdown ao final de uma página
+notion-tasks escrever <id> ... --substituir  # troca o corpo inteiro (não empilha)
+notion-tasks editar-bloco <id>   # substitui o texto de um bloco (ID vem de 'blocos')
+notion-tasks apagar-bloco <id> --sim  # apaga um bloco (ID vem de 'blocos')
+notion-tasks limpar <id> --sim   # zera o corpo da página para reescrever do zero
 notion-tasks clonar <id>         # clona páginas/estruturas
 
 # Relatórios diários

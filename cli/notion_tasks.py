@@ -186,6 +186,8 @@ def _formatar_humano(comando: str, dados: Any) -> str:
         return dados["markdown"] or "(página sem conteúdo)"
     if comando == "linhas":
         return "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
+    if comando == "blocos":
+        return "\n".join(_linhas_tabela(dados["blocos"], ("id", "tipo", "preview")))
     if comando == "clonar-database":
         return (
             f"Clone criado: {dados['titulo']} ({dados['id']})\n"
@@ -496,11 +498,31 @@ def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory)
     )
 
 
+def cmd_blocos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    blocos = svc_conteudo.listar_blocos(page_id, cliente=client_factory())
+    return {"id": page_id, "blocos": blocos}
+
+
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _texto_obrigatorio(args.page_id, "page_id")
     conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
-    total = svc_conteudo.escrever_conteudo(page_id, conteudo, cliente=client_factory())
-    return {"id": page_id, "blocos_anexados": total}
+    total = svc_conteudo.escrever_conteudo(
+        page_id, conteudo, substituir=args.substituir, cliente=client_factory()
+    )
+    return {"id": page_id, "blocos_anexados": total, "substituiu": args.substituir}
+
+
+def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    # Operação destrutiva: exige confirmação explícita, nunca apaga "no susto".
+    if not args.sim:
+        raise CLIError(
+            "Limpar apaga TODO o corpo da página (destrutivo). "
+            "Repita com --sim para confirmar."
+        )
+    total = svc_conteudo.limpar_conteudo(page_id, cliente=client_factory())
+    return {"id": page_id, "blocos_apagados": total}
 
 
 def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -619,9 +641,14 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         'python -m cli --json editar-linha <page_id> --append '
         '"Resumo=\\n\\nNova observação ao final"',
     ],
-    "escrever": ["python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'"],
+    "blocos": ["python -m cli --json blocos <page_id>"],
+    "escrever": [
+        "python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'",
+        "python -m cli --json escrever <page_id> $'# Só isto' --substituir",
+    ],
     "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
     "apagar-bloco": ["python -m cli --json apagar-bloco <block_id> --sim"],
+    "limpar": ["python -m cli --json limpar <page_id> --sim"],
     "clonar-database": [
         "python -m cli --json clonar-database <database_id>",
         'python -m cli --json clonar-database <database_id> --titulo "Cópia" --com-linhas',
@@ -680,6 +707,11 @@ def cmd_guia(args: argparse.Namespace) -> Any:
             "2. Conteúdo (o corpo da nota, em blocos) → 'escrever <page_id> <markdown>'.",
             "Não pare no conteúdo esquecendo as propriedades: uma linha de database "
             "só fica completa quando as colunas também são preenchidas.",
+            "ATENÇÃO: 'escrever' ANEXA ao final (não substitui). Repetir empilha "
+            "conteúdo. Para TROCAR o corpo, use 'escrever ... --substituir'.",
+            "Para corrigir/reescrever uma página: veja os blocos com ID em "
+            "'blocos <page_id>', então 'apagar-bloco'/'editar-bloco' por ID, ou "
+            "'limpar <page_id> --sim' para zerar e reescrever do zero.",
         ],
         "comandos": comandos,
     }
@@ -779,21 +811,49 @@ def construir_parser() -> argparse.ArgumentParser:
         "Texto longo é fatiado automaticamente no limite de 2000.",
     )
 
+    blocos = sub.add_parser(
+        "blocos",
+        help="lista os blocos de topo de uma página COM o ID de cada um — use "
+        "antes de 'editar-bloco'/'apagar-bloco', que precisam do block_id",
+    )
+    blocos.add_argument("page_id")
+
     escrever = sub.add_parser(
         "escrever",
-        help="anexa conteúdo (Markdown) a uma página — se for linha de database, "
+        help="ANEXA conteúdo (Markdown) ao final de uma página (não substitui); "
+        "use --substituir para trocar o corpo inteiro. Se for linha de database, "
         "defina antes as propriedades com 'editar-linha'",
     )
     escrever.add_argument("page_id")
     escrever.add_argument("conteudo", help="texto em Markdown a anexar")
+    escrever.add_argument(
+        "--substituir",
+        action="store_true",
+        help="apaga o corpo atual antes de escrever — a página fica só com este "
+        "conteúdo (evita ir empilhando blocos ao corrigir/reescrever)",
+    )
 
-    editar_bloco = sub.add_parser("editar-bloco", help="substitui o texto de um bloco")
+    editar_bloco = sub.add_parser(
+        "editar-bloco",
+        help="substitui o texto de um bloco (pegue o block_id em 'blocos')",
+    )
     editar_bloco.add_argument("block_id")
     editar_bloco.add_argument("conteudo", help="nova linha em Markdown")
 
-    apagar_bloco = sub.add_parser("apagar-bloco", help="apaga (arquiva) um bloco — destrutivo")
+    apagar_bloco = sub.add_parser(
+        "apagar-bloco",
+        help="apaga (arquiva) um bloco — destrutivo (pegue o block_id em 'blocos')",
+    )
     apagar_bloco.add_argument("block_id")
     apagar_bloco.add_argument("--sim", action="store_true", help="confirma a exclusão")
+
+    limpar = sub.add_parser(
+        "limpar",
+        help="apaga TODO o corpo de uma página de uma vez — destrutivo; use para "
+        "reiniciar uma página bagunçada antes de reescrever",
+    )
+    limpar.add_argument("page_id")
+    limpar.add_argument("--sim", action="store_true", help="confirma a limpeza")
 
     buscar = sub.add_parser("buscar", help="pesquisa páginas e databases visíveis")
     buscar.add_argument("query", nargs="?", help="texto do título; vazio lista tudo")
@@ -905,6 +965,8 @@ def executar(
             dados = cmd_conteudo(args, client_factory=client_factory)
         elif comando == "linhas":
             dados = cmd_linhas(args, client_factory=client_factory)
+        elif comando == "blocos":
+            dados = cmd_blocos(args, client_factory=client_factory)
         elif comando == "editar-linha":
             dados = cmd_editar_linha(args, client_factory=client_factory)
         elif comando == "escrever":
@@ -913,6 +975,8 @@ def executar(
             dados = cmd_editar_bloco(args, client_factory=client_factory)
         elif comando == "apagar-bloco":
             dados = cmd_apagar_bloco(args, client_factory=client_factory)
+        elif comando == "limpar":
+            dados = cmd_limpar(args, client_factory=client_factory)
         elif comando == "buscar":
             dados = cmd_buscar(args, client_factory=client_factory)
         elif comando == "clonar-database":

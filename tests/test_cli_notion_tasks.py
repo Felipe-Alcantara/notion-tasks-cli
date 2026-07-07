@@ -566,6 +566,54 @@ def test_apagar_bloco_com_sim_apaga():
     assert ("excluir_bloco", "b1") in client.chamadas
 
 
+def test_blocos_lista_ids_para_editar_ou_apagar():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "b1", "type": "heading_1", "heading_1": {"rich_text": [{"plain_text": "T"}]}},
+        {"id": "b2", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "corpo"}]}},
+    ]
+    codigo, saida = _executar(["--json", "blocos", "page1"], client=client)
+    assert codigo == 0
+    ids = [b["id"] for b in saida["dados"]["blocos"]]
+    assert ids == ["b1", "b2"]
+    assert saida["dados"]["blocos"][0]["preview"] == "# T"
+
+
+def test_escrever_substituir_limpa_antes():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "velho", "type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "lixo"}]}}
+    ]
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "novo", "--substituir"], client=client
+    )
+    assert codigo == 0
+    assert saida["dados"]["substituiu"] is True
+    assert ("excluir_bloco", "velho") in client.chamadas
+    assert any(c[0] == "anexar_blocos" for c in client.chamadas)
+
+
+def test_limpar_sem_sim_nao_apaga():
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "limpar", "page1"], client=client)
+    assert codigo == 2
+    assert saida["ok"] is False
+    assert not any(c[0] == "excluir_bloco" for c in client.chamadas)
+
+
+def test_limpar_com_sim_apaga_o_corpo():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": []}},
+        {"id": "b2", "type": "paragraph", "paragraph": {"rich_text": []}},
+    ]
+    codigo, saida = _executar(["--json", "limpar", "page1", "--sim"], client=client)
+    assert codigo == 0
+    assert saida["dados"]["blocos_apagados"] == 2
+    assert ("excluir_bloco", "b1") in client.chamadas
+    assert ("excluir_bloco", "b2") in client.chamadas
+
+
 def test_buscar_normaliza_itens():
     client = FakeClient()
     codigo, saida = _executar(["--json", "buscar", "x"], client=client)
