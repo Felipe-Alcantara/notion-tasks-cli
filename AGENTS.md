@@ -6,8 +6,8 @@ CLI do Notion **feito para IAs** ("MCP via CLI"), módulo do ecossistema [Automa
 
 ```
 cli/notion_tasks.py   → borda: parse de argumentos, saída humana/JSON, --help para IAs
-services/             → regra de negócio (tarefas, clonagem, conteúdo, inventário, sync GitHub)
-integrations/         → adaptadores externos (Notion via notion-starter, GitHub, OpenRouter)
+services/             → shims para notion_starter.services; exceção: propriedades.py é específico do CLI
+integrations/         → Notion local + shims para adaptadores GitHub/OpenRouter do notion-starter
 core/config.py        → configuração (.env, token) — imutável, nunca vaza segredo em repr
 ```
 
@@ -15,9 +15,12 @@ core/config.py        → configuração (.env, token) — imutável, nunca vaza
 - `services` não conhece argparse nem HTTP de borda.
 - A base Notion vem da lib [notion-starter](https://github.com/Felipe-Alcantara/notion-starter) (dependência via git).
 
-## ⚠️ Camada duplicada
+## Camada compartilhada
 
-`core/`, `integrations/` e `services/` também existem em `notion-workspace-app/server/`. Bugfix nessa camada deve ser aplicado **nos dois repositórios**. (Roadmap: consolidar no `notion-starter`.)
+`integrations/github.py`, `integrations/openrouter.py` e os `services` comuns são shims para
+`notion-starter`. Bugfix de regra compartilhada deve ser feito em
+`modules/notion-starter/src/notion_starter/`. `services/propriedades.py` continua específico do
+CLI.
 
 ## Convenções do CLI
 

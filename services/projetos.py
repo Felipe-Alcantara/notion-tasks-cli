@@ -1,42 +1,21 @@
-"""Casos de uso de páginas de projeto no Notion."""
+﻿"""Compatibilidade para `services.projetos` consolidado no `notion_starter`."""
 
-from __future__ import annotations
+import importlib
+import sys
+from pathlib import Path
 
-from dataclasses import dataclass
+try:
+    _modulo = importlib.import_module("notion_starter.services.projetos")
+except ModuleNotFoundError:
+    starter_src = Path(__file__).resolve().parents[2] / "notion-starter" / "src"
+    if starter_src.exists() and str(starter_src) not in sys.path:
+        sys.path.insert(0, str(starter_src))
+    import notion_starter
 
-from integrations.github import RepoInfo
+    starter_pkg = starter_src / "notion_starter"
+    if starter_pkg.exists() and str(starter_pkg) not in notion_starter.__path__:
+        notion_starter.__path__.append(str(starter_pkg))
+    _modulo = importlib.import_module("notion_starter.services.projetos")
 
-from notion_starter import NotionClient
-from services.sincronizar_github import CamposProjeto, _propriedades_pagina
-
-
-@dataclass(frozen=True)
-class ProjetoAtualizado:
-    """Referência pública de uma página de projeto atualizada."""
-
-    id: str
-    url: str | None = None
-
-
-def atualizar_pagina_projeto(
-    page_id: str,
-    repo: RepoInfo,
-    *,
-    notion_client: NotionClient | None = None,
-    campos: CamposProjeto | None = None,
-) -> ProjetoAtualizado:
-    """Atualiza uma página de projeto com metadados normalizados do GitHub."""
-
-    if notion_client is None:
-        from integrations.notion import criar_cliente
-
-        notion_client = criar_cliente()
-
-    pagina = notion_client.atualizar_pagina(
-        page_id,
-        _propriedades_pagina(repo, campos),
-    )
-    return ProjetoAtualizado(
-        id=str(pagina.get("id") or page_id),
-        url=str(pagina["url"]) if pagina.get("url") else None,
-    )
+globals().update(vars(_modulo))
+sys.modules[__name__] = _modulo

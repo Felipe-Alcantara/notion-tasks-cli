@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notion-tasks-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "CLI de tarefas do Notion pensado para IAs: um 'MCP via CLI' que permite a qualquer modelo criar, editar e mover tarefas no workspace."
 readme = "README.md"
 requires-python = ">=3.10"
