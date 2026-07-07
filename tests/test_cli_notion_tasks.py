@@ -10,8 +10,9 @@ import json
 from pathlib import Path
 from unittest import mock
 
-from cli import notion_tasks as cli
 from notion_starter import Tarefa
+
+from cli import notion_tasks as cli
 
 
 class FakeTaskList:
@@ -773,3 +774,110 @@ def test_atualizar_github_humano_resume(monkeypatch):
     codigo, saida = _executar(["atualizar-github", "--contas", "x", "--database", "db1"])
     assert codigo == 0
     assert "Repos: 3" in saida
+
+
+# -- exportar-docx ---------------------------------------------------------
+
+
+def test_exportar_docx_passa_periodo_database_e_saida(monkeypatch, tmp_path: Path):
+    capturado = {}
+
+    def fake_exportar(**kwargs):
+        capturado.update(kwargs)
+        return {
+            "database_id": kwargs["database_id"],
+            "periodo": {"de": kwargs["data_inicio"], "ate": kwargs["data_fim"]},
+            "campo_data": kwargs["campo_data"],
+            "saida": str(kwargs["saida"]),
+            "total": 1,
+            "arquivos": [],
+        }
+
+    monkeypatch.setattr(cli.svc_relatorios_docx, "exportar_relatorios_docx", fake_exportar)
+
+    codigo, saida = _executar(
+        [
+            "--json",
+            "exportar-docx",
+            "--database",
+            "db-relatorios",
+            "--de",
+            "2026-07-01",
+            "--ate",
+            "2026-07-06",
+            "--saida",
+            str(tmp_path),
+        ]
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["total"] == 1
+    assert capturado["database_id"] == "db-relatorios"
+    assert capturado["data_inicio"] == "2026-07-01"
+    assert capturado["data_fim"] == "2026-07-06"
+    assert capturado["campo_data"] == "Data"
+
+
+def test_exportar_docx_usa_env_especifico_antes_do_database_padrao(monkeypatch, tmp_path: Path):
+    capturado = {}
+    monkeypatch.setenv("NOTION_REPORTS_DATABASE_ID", "db-relatorios")
+    monkeypatch.setenv("NOTION_DATABASE_ID", "db-tarefas")
+    monkeypatch.setattr(
+        cli.svc_relatorios_docx,
+        "exportar_relatorios_docx",
+        lambda **kwargs: capturado.update(kwargs)
+        or {
+            "database_id": kwargs["database_id"],
+            "periodo": {"de": kwargs["data_inicio"], "ate": kwargs["data_fim"]},
+            "saida": str(kwargs["saida"]),
+            "total": 0,
+            "arquivos": [],
+        },
+    )
+
+    codigo, _ = _executar(
+        [
+            "--json",
+            "exportar-docx",
+            "--de",
+            "2026-07-01",
+            "--ate",
+            "2026-07-06",
+            "--saida",
+            str(tmp_path),
+        ]
+    )
+
+    assert codigo == 0
+    assert capturado["database_id"] == "db-relatorios"
+
+
+def test_exportar_docx_humano_resume(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        cli.svc_relatorios_docx,
+        "exportar_relatorios_docx",
+        lambda **kwargs: {
+            "database_id": "db1",
+            "periodo": {"de": "2026-07-01", "ate": "2026-07-06"},
+            "saida": str(tmp_path),
+            "total": 2,
+            "arquivos": [],
+        },
+    )
+
+    codigo, saida = _executar(
+        [
+            "exportar-docx",
+            "--database",
+            "db1",
+            "--de",
+            "2026-07-01",
+            "--ate",
+            "2026-07-06",
+            "--saida",
+            str(tmp_path),
+        ]
+    )
+
+    assert codigo == 0
+    assert "DOCX exportados: 2" in saida

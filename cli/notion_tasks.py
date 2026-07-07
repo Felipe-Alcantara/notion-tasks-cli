@@ -15,17 +15,11 @@ from typing import Any
 
 RAIZ = Path(__file__).resolve().parents[1]
 SERVER_DIR = RAIZ / "server"
+LOCAL_STARTER = RAIZ.parent / "notion-starter" / "src"
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
-
-from core.config import carregar_env_file  # noqa: E402
-from integrations.github import GitHubClient  # noqa: E402
-from services import clonagem as svc_clonagem  # noqa: E402
-from services import conteudo as svc_conteudo  # noqa: E402
-from services import inventario_github as svc_inventario  # noqa: E402
-from services import normalizacao as svc_normalizacao  # noqa: E402
-from services import propriedades as svc_propriedades  # noqa: E402
-from services import tarefas as svc  # noqa: E402
+if LOCAL_STARTER.exists() and str(LOCAL_STARTER) not in sys.path:
+    sys.path.insert(0, str(LOCAL_STARTER))
 
 from notion_starter import (  # noqa: E402
     NotionAPIError,
@@ -35,6 +29,16 @@ from notion_starter import (  # noqa: E402
     TaskList,
     construir_inventario,
 )
+from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
+
+from core.config import carregar_env_file  # noqa: E402
+from integrations.github import GitHubClient  # noqa: E402
+from services import clonagem as svc_clonagem  # noqa: E402
+from services import conteudo as svc_conteudo  # noqa: E402
+from services import inventario_github as svc_inventario  # noqa: E402
+from services import normalizacao as svc_normalizacao  # noqa: E402
+from services import propriedades as svc_propriedades  # noqa: E402
+from services import tarefas as svc  # noqa: E402
 
 carregar_env_file()
 
@@ -213,6 +217,11 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"READMEs novos: {dados['readmes_escritos']} | "
             f"READMEs atualizados: {dados['readmes_atualizados']} | "
             f"erros: {len(dados['erros'])}"
+        )
+    if comando == "exportar-docx":
+        return (
+            f"DOCX exportados: {dados['total']} | periodo: "
+            f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
     return _json(dados)
 
@@ -566,6 +575,26 @@ def cmd_atualizar_github(args: argparse.Namespace, *, client_factory: ClientFact
     return _resumo_inventario_dict(resumo)
 
 
+def cmd_exportar_docx(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _normalizar_texto(args.database) or os.environ.get(
+        "NOTION_REPORTS_DATABASE_ID", ""
+    ).strip()
+    if not database_id:
+        database_id = os.environ.get("NOTION_DATABASE_ID", "").strip()
+    if not database_id:
+        raise CLIError(
+            "Informe --database ou configure NOTION_REPORTS_DATABASE_ID/NOTION_DATABASE_ID."
+        )
+    return svc_relatorios_docx.exportar_relatorios_docx(
+        database_id=database_id,
+        data_inicio=_texto_obrigatorio(args.de, "de"),
+        data_fim=_texto_obrigatorio(args.ate, "ate"),
+        saida=_texto_obrigatorio(args.saida, "saida"),
+        campo_data=_texto_obrigatorio(args.campo_data, "campo_data"),
+        cliente=client_factory(),
+    )
+
+
 #: Exemplos de uso por comando, mostrados pelo ``guia``. Texto curto e copiável.
 EXEMPLOS_GUIA: dict[str, list[str]] = {
     "listar": ['python -m cli --json listar --status "Entrada"'],
@@ -585,8 +614,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "linhas": ["python -m cli --json linhas <database_id>"],
     "editar-linha": [
         'python -m cli --json editar-linha <page_id> --set "Status=Feito"',
-        'python -m cli --json editar-linha <page_id> --set "Prazo=2026-07-10" --set "Tags=urgente,casa"',
-        'python -m cli --json editar-linha <page_id> --append "Resumo=\\n\\nNova observação ao final"',
+        'python -m cli --json editar-linha <page_id> --set "Prazo=2026-07-10" '
+        '--set "Tags=urgente,casa"',
+        'python -m cli --json editar-linha <page_id> --append '
+        '"Resumo=\\n\\nNova observação ao final"',
     ],
     "escrever": ["python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'"],
     "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
@@ -599,7 +630,13 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
         "python -m cli --json atualizar-github --database <database_id> --sem-readme",
         "python -m cli --json atualizar-github --contas conta-um --sem-arquivados",
-        "python -m cli --json atualizar-github --contas https://github.com/conta-um --apenas-mudancas",
+        "python -m cli --json atualizar-github --contas https://github.com/conta-um "
+        "--apenas-mudancas",
+    ],
+    "exportar-docx": [
+        "python -m cli --json exportar-docx --de 2026-07-01 --ate 2026-07-06 --saida ./exports",
+        "python -m cli --json exportar-docx --database <database_id> --campo-data Data "
+        "--de 2026-07-01 --ate 2026-07-06 --saida ./exports",
     ],
     "guia": ["python -m cli --json guia"],
 }
@@ -810,6 +847,20 @@ def construir_parser() -> argparse.ArgumentParser:
         help="pula repositórios existentes sem alteração (updated_at não avançou)",
     )
 
+    exportar_docx = sub.add_parser(
+        "exportar-docx",
+        help="exporta relatorios diarios do Notion para DOCX, um arquivo por dia",
+    )
+    exportar_docx.add_argument("--database", help="database de relatorios; padrao: env")
+    exportar_docx.add_argument("--de", required=True, help="data inicial YYYY-MM-DD")
+    exportar_docx.add_argument("--ate", required=True, help="data final YYYY-MM-DD")
+    exportar_docx.add_argument("--saida", required=True, help="diretorio de saida")
+    exportar_docx.add_argument(
+        "--campo-data",
+        default="Data",
+        help="nome da propriedade de data usada no filtro (padrao: Data)",
+    )
+
     sub.add_parser("guia", help="lista todos os comandos com o que fazem e exemplos")
     return parser
 
@@ -868,6 +919,8 @@ def executar(
             dados = cmd_clonar_database(args, client_factory=client_factory)
         elif comando == "atualizar-github":
             dados = cmd_atualizar_github(args, client_factory=client_factory)
+        elif comando == "exportar-docx":
+            dados = cmd_exportar_docx(args, client_factory=client_factory)
         else:
             raise CLIError(f"Comando desconhecido: {comando}")
         return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)

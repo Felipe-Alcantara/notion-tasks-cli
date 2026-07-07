@@ -8,9 +8,9 @@ Não há regra de negócio aqui.
 
 from __future__ import annotations
 
-from core.config import carregar_config
-
 from notion_starter import CamposTarefa, NotionClient, TaskList
+
+from core.config import carregar_config
 
 
 class ImproperlyConfigured(RuntimeError):

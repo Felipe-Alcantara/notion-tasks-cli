@@ -4,7 +4,6 @@ import importlib
 import sys
 from pathlib import Path
 
-
 try:
     _modulo = importlib.import_module("notion_starter.github")
 except ModuleNotFoundError:

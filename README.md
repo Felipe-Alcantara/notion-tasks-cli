@@ -40,6 +40,9 @@ notion-tasks conteudo <id>       # lê uma página como Markdown
 notion-tasks escrever <id>       # anexa Markdown a uma página
 notion-tasks editar-bloco <id>   # substitui o texto de um bloco
 notion-tasks clonar <id>         # clona páginas/estruturas
+
+# Relatórios diários
+notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports
 ```
 
 Também funciona como módulo: `python -m cli ...` — e `--help` traz o guia completo, escrito para ser lido por modelos de IA.

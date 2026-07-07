@@ -149,7 +149,10 @@ def test_set_e_append_juntos_em_colunas_diferentes():
     client = FakeClient(
         {
             "Status": {"type": "status", "status": {"name": "Inbox"}},
-            "Resumo": {"type": "rich_text", "rich_text": [{"type": "text", "text": {"content": "x"}}]},
+            "Resumo": {
+                "type": "rich_text",
+                "rich_text": [{"type": "text", "text": {"content": "x"}}],
+            },
         }
     )
     r = svc.editar_linha("pg", {"Status": "Feito"}, {"Resumo": "y"}, cliente=client)
