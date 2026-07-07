@@ -685,6 +685,7 @@ class _ResumoFake:
     repos_encontrados = 3
     paginas_criadas = 1
     paginas_atualizadas = 2
+    paginas_puladas = 0
     readmes_escritos = 1
     readmes_atualizados = 1
     erros: list[str] = []
@@ -725,6 +726,38 @@ def test_atualizar_github_sem_readme(monkeypatch):
     )
     assert codigo == 0
     assert capturado["sincronizar_readme"] is False
+    # Sem a flag, arquivados entram normalmente.
+    assert capturado["ignorar_arquivados"] is False
+
+
+def test_atualizar_github_sem_arquivados(monkeypatch):
+    capturado = {}
+    monkeypatch.setattr(
+        cli.svc_inventario,
+        "atualizar_repos",
+        lambda c, d, **k: capturado.update(k) or _ResumoFake(),
+    )
+    monkeypatch.setattr(cli, "GitHubClient", lambda *a, **k: object())
+    codigo, _ = _executar(
+        ["--json", "atualizar-github", "--contas", "x", "--database", "db1", "--sem-arquivados"]
+    )
+    assert codigo == 0
+    assert capturado["ignorar_arquivados"] is True
+
+
+def test_atualizar_github_apenas_mudancas(monkeypatch):
+    capturado = {}
+    monkeypatch.setattr(
+        cli.svc_inventario,
+        "atualizar_repos",
+        lambda c, d, **k: capturado.update(k) or _ResumoFake(),
+    )
+    monkeypatch.setattr(cli, "GitHubClient", lambda *a, **k: object())
+    codigo, _ = _executar(
+        ["--json", "atualizar-github", "--contas", "x", "--database", "db1", "--apenas-mudancas"]
+    )
+    assert codigo == 0
+    assert capturado["apenas_mudancas"] is True
 
 
 def test_atualizar_github_exige_contas(monkeypatch):

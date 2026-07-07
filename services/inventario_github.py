@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from integrations.github import GitHubClient, RepoInfo
 
 from notion_starter import NotionClient, properties
-from notion_starter.readers import ler_rich_text
+from notion_starter.readers import ler_date, ler_rich_text
 
 # Limite defensivo do tamanho do README importado (Markdown bruto).
 MAX_README_CHARS = 100_000
@@ -77,6 +78,7 @@ class ResumoInventario:
     repos_encontrados: int = 0
     paginas_criadas: int = 0
     paginas_atualizadas: int = 0
+    paginas_puladas: int = 0
     readmes_escritos: int = 0
     readmes_atualizados: int = 0
     erros: list[str] = field(default_factory=list)
@@ -115,6 +117,45 @@ def construir_schema(campos: CamposGitHub | None = None) -> dict[str, dict[str, 
         c.enviado_em: {"date": {}},
         c.readme_hash: {"rich_text": {}},
     }
+
+
+def _parse_data(valor: str | None) -> datetime | None:
+    """Converte uma data ISO 8601 (com ``Z`` ou offset) em ``datetime`` aware.
+
+    Tolera o ``Z`` do GitHub e o offset ``+00:00`` que o Notion devolve; datas
+    sem fuso são assumidas em UTC. Retorna ``None`` quando não dá para parsear.
+    """
+
+    if not valor:
+        return None
+    try:
+        dt = datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _repo_mudou_desde_pagina(
+    repo: RepoInfo,
+    existente: dict[str, Any] | None,
+    campos: CamposGitHub,
+) -> bool:
+    """Indica se o repositório mudou desde o último sync (``updated_at`` mais novo).
+
+    Compara o ``updated_at`` do GitHub com a data gravada na coluna
+    :attr:`CamposGitHub.atualizado_em` da página. Na dúvida (repo sem data, página
+    sem data, ou formato ilegível) retorna ``True`` para não pular por engano —
+    o modo incremental só deve poupar quando tem certeza de que nada mudou.
+    """
+
+    nova = _parse_data(repo.atualizado_em)
+    if nova is None:
+        return True
+    props = existente.get("properties", {}) if existente else {}
+    antiga = _parse_data(ler_date(props.get(campos.atualizado_em)))
+    if antiga is None:
+        return True
+    return nova > antiga
 
 
 def _hash_readme(readme: str | None) -> str:
@@ -337,6 +378,7 @@ def exportar_repos(
     notion_client: NotionClient,
     campos: CamposGitHub | None = None,
     incluir_readme: bool = True,
+    ignorar_arquivados: bool = False,
 ) -> ResumoInventario:
     """Exporta os repositórios das ``contas`` para o ``database_id``.
 
@@ -344,6 +386,9 @@ def exportar_repos(
     ``incluir_readme`` é verdadeiro, busca os detalhes do repo e escreve o README
     no corpo da página recém-criada. READMEs só são escritos em páginas novas,
     para não duplicar o conteúdo em execuções repetidas.
+
+    Quando ``ignorar_arquivados`` é verdadeiro, repositórios arquivados no GitHub
+    são pulados.
 
     Erros por repositório são acumulados em :attr:`ResumoInventario.erros` e não
     interrompem a exportação dos demais.
@@ -357,7 +402,9 @@ def exportar_repos(
     campos = campos or CamposGitHub()
     resumo = ResumoInventario()
 
-    for repo in _coletar_repos(contas, github_client, resumo):
+    for repo in _coletar_repos(
+        contas, github_client, resumo, ignorar_arquivados=ignorar_arquivados
+    ):
         _exportar_repo(
             repo,
             database_id,
@@ -375,12 +422,18 @@ def _coletar_repos(
     contas: list[str],
     github_client: GitHubClient,
     resumo: ResumoInventario,
+    *,
+    ignorar_arquivados: bool = False,
 ):
     """Itera os repositórios de todas as ``contas``, sem duplicar entre elas.
 
     Conta `repos_encontrados` e registra falhas de listagem em ``resumo.erros``,
     seguindo para as demais contas. É a coleta compartilhada por
     :func:`exportar_repos` e :func:`atualizar_repos`.
+
+    Quando ``ignorar_arquivados`` é verdadeiro, repositórios arquivados no GitHub
+    são pulados (não entram na contagem de ``repos_encontrados``), útil para
+    manter a database só com projetos ativos.
     """
 
     vistos: set[str] = set()
@@ -391,6 +444,8 @@ def _coletar_repos(
             resumo.erros.append(f"listar {conta}: {exc}")
             continue
         for repo in repos:
+            if ignorar_arquivados and repo.arquivado:
+                continue
             chave = repo.url_html or repo.nome_completo
             if chave in vistos:
                 continue
@@ -452,6 +507,8 @@ def atualizar_repos(
     notion_client: NotionClient,
     campos: CamposGitHub | None = None,
     sincronizar_readme: bool = True,
+    ignorar_arquivados: bool = False,
+    apenas_mudancas: bool = False,
 ) -> ResumoInventario:
     """Re-sincroniza o inventário das ``contas`` no ``database_id``.
 
@@ -460,6 +517,14 @@ def atualizar_repos(
     o conteúdo mudou (detectado por hash gravado na página, sem reler os blocos).
     Repositórios renomeados são tratados pelo *match* por URL, que não muda quando
     o nome muda.
+
+    Quando ``ignorar_arquivados`` é verdadeiro, repositórios arquivados no GitHub
+    são pulados — a database fica só com projetos ativos.
+
+    Quando ``apenas_mudancas`` é verdadeiro, repositórios já existentes cujo
+    ``updated_at`` não avançou desde o último sync são pulados sem reescrita nem
+    busca de README (contados em :attr:`ResumoInventario.paginas_puladas`),
+    economizando chamadas. Repositórios novos entram normalmente.
 
     Erros por repositório são acumulados em :attr:`ResumoInventario.erros` e não
     interrompem a atualização dos demais.
@@ -480,7 +545,9 @@ def atualizar_repos(
         except Exception as exc:  # noqa: BLE001 — segue; a 1ª escrita avisaria de novo
             resumo.erros.append(f"garantir coluna README hash: {exc}")
 
-    for repo in _coletar_repos(contas, github_client, resumo):
+    for repo in _coletar_repos(
+        contas, github_client, resumo, ignorar_arquivados=ignorar_arquivados
+    ):
         _atualizar_repo(
             repo,
             database_id,
@@ -488,6 +555,7 @@ def atualizar_repos(
             notion_client=notion_client,
             campos=campos,
             sincronizar_readme=sincronizar_readme,
+            apenas_mudancas=apenas_mudancas,
             resumo=resumo,
         )
 
@@ -503,6 +571,7 @@ def _atualizar_repo(
     campos: CamposGitHub,
     sincronizar_readme: bool,
     resumo: ResumoInventario,
+    apenas_mudancas: bool = False,
 ) -> None:
     """Cria ou atualiza a página de um repositório e re-sincroniza o README."""
 
@@ -511,6 +580,17 @@ def _atualizar_repo(
         existente = _pagina_existente(notion_client, database_id, repo, campos)
     except Exception as exc:  # noqa: BLE001
         resumo.erros.append(f"{repo.nome_completo}: {exc}")
+        return
+
+    # Modo incremental: se a página já existe e o repo não mudou desde o último
+    # sync, pula sem reescrever nem buscar README (economiza chamadas).
+    if (
+        apenas_mudancas
+        and existente
+        and existente.get("id")
+        and not _repo_mudou_desde_pagina(repo, existente, campos)
+    ):
+        resumo.paginas_puladas += 1
         return
 
     # Repo novo: cai no fluxo de criação (escreve README + grava hash).

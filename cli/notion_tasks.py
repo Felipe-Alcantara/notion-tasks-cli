@@ -209,6 +209,7 @@ def _formatar_humano(comando: str, dados: Any) -> str:
         return (
             f"Repos: {dados['repos_encontrados']} | criados: {dados['paginas_criadas']} | "
             f"atualizados: {dados['paginas_atualizadas']} | "
+            f"pulados: {dados['paginas_puladas']} | "
             f"READMEs novos: {dados['readmes_escritos']} | "
             f"READMEs atualizados: {dados['readmes_atualizados']} | "
             f"erros: {len(dados['erros'])}"
@@ -532,6 +533,7 @@ def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
         "repos_encontrados": resumo.repos_encontrados,
         "paginas_criadas": resumo.paginas_criadas,
         "paginas_atualizadas": resumo.paginas_atualizadas,
+        "paginas_puladas": resumo.paginas_puladas,
         "readmes_escritos": resumo.readmes_escritos,
         "readmes_atualizados": resumo.readmes_atualizados,
         "erros": resumo.erros,
@@ -558,6 +560,8 @@ def cmd_atualizar_github(args: argparse.Namespace, *, client_factory: ClientFact
         github_client=GitHubClient(),
         notion_client=client_factory(),
         sincronizar_readme=not args.sem_readme,
+        ignorar_arquivados=args.sem_arquivados,
+        apenas_mudancas=args.apenas_mudancas,
     )
     return _resumo_inventario_dict(resumo)
 
@@ -594,6 +598,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
         "python -m cli --json atualizar-github --database <database_id> --sem-readme",
+        "python -m cli --json atualizar-github --contas conta-um --sem-arquivados",
+        "python -m cli --json atualizar-github --contas https://github.com/conta-um --apenas-mudancas",
     ],
     "guia": ["python -m cli --json guia"],
 }
@@ -792,6 +798,16 @@ def construir_parser() -> argparse.ArgumentParser:
         "--sem-readme",
         action="store_true",
         help="atualiza só as propriedades, sem mexer na subpágina README",
+    )
+    atualizar_github.add_argument(
+        "--sem-arquivados",
+        action="store_true",
+        help="ignora repositórios arquivados no GitHub (mantém só os ativos)",
+    )
+    atualizar_github.add_argument(
+        "--apenas-mudancas",
+        action="store_true",
+        help="pula repositórios existentes sem alteração (updated_at não avançou)",
     )
 
     sub.add_parser("guia", help="lista todos os comandos com o que fazem e exemplos")

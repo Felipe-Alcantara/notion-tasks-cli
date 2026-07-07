@@ -23,6 +23,25 @@ MAX_REPOS = 500
 
 _PADRAO_USUARIO = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 _PADRAO_REPO = re.compile(r"^[A-Za-z0-9_.-]+$")
+_PADRAO_URL_PERFIL = re.compile(r"github\.com/([^/\s?#]+)", re.IGNORECASE)
+
+
+def extrair_login(texto: str) -> str:
+    """Extrai o login do GitHub de uma URL de perfil, ``@handle`` ou nome puro.
+
+    Aceita ``https://github.com/User``, ``github.com/User/``, ``@User`` e
+    ``User``. Devolve só o login (sem validar o formato — quem valida é
+    :meth:`GitHubClient._validar_usuario`). Facilita colar URLs de perfil ao
+    importar vários usuários de uma vez, sem obrigar o chamador a limpar a mão.
+    """
+
+    bruto = (texto or "").strip()
+    if not bruto:
+        return ""
+    match = _PADRAO_URL_PERFIL.search(bruto)
+    if match:
+        return match.group(1).strip()
+    return bruto.lstrip("@").strip().rstrip("/")
 
 
 @dataclass(frozen=True)
@@ -386,7 +405,7 @@ class GitHubClient:
 
     @staticmethod
     def _validar_usuario(usuario: str) -> str:
-        limpo = (usuario or "").strip()
+        limpo = extrair_login(usuario)
         if not _PADRAO_USUARIO.fullmatch(limpo):
             raise ValueError("usuario deve ser um login válido do GitHub.")
         return limpo
