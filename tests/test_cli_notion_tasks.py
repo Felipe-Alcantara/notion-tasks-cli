@@ -428,6 +428,55 @@ def test_escolher_database_grava_env_file(tmp_path: Path):
     assert saida["dados"]["database_id"] == "db_novo"
 
 
+def test_perfil_global_aplica_workspace_antes_do_comando():
+    with mock.patch.object(cli.perfis_workspace, "aplicar_perfil") as aplicar:
+        codigo, saida = _executar(["--json", "--perfil", "cliente", "databases"])
+
+    assert codigo == 0
+    assert saida["dados"][0]["id"] == "db1"
+    aplicar.assert_called_once_with("cliente")
+
+
+def test_perfis_adicionar_retorna_token_mascarado(tmp_path: Path):
+    arquivo = tmp_path / "perfis.json"
+    token = "ntn_" + "a" * 20
+    with mock.patch.object(cli.perfis_workspace, "ARQUIVO_PADRAO", arquivo):
+        codigo, saida = _executar(
+            [
+                "--json",
+                "perfis",
+                "adicionar",
+                "cliente",
+                "--token",
+                token,
+                "--database",
+                "db-cliente",
+                "--nome",
+                "Cliente",
+                "--ativar",
+            ]
+        )
+
+    assert codigo == 0
+    assert saida["dados"]["perfil"]["alias"] == "cliente"
+    assert saida["dados"]["perfil"]["token"] == "ntn_aa...aaaa"
+    assert token not in json.dumps(saida, ensure_ascii=False)
+
+
+def test_perfis_remover_exige_confirmacao(tmp_path: Path):
+    arquivo = tmp_path / "perfis.json"
+    cli.perfis_workspace.adicionar_perfil(
+        alias="cliente",
+        token="ntn_" + "a" * 20,
+        caminho=arquivo,
+    )
+    with mock.patch.object(cli.perfis_workspace, "ARQUIVO_PADRAO", arquivo):
+        codigo, saida = _executar(["--json", "perfis", "remover", "cliente"])
+
+    assert codigo == 2
+    assert "--sim" in saida["erro"]["mensagem"]
+
+
 def test_normalizar_nomes_dry_run_nao_escreve_no_notion(monkeypatch):
     monkeypatch.setenv("NOTION_DATABASE_ID", "db1")
     client = FakeClient()

@@ -31,6 +31,7 @@ from notion_starter import (  # noqa: E402
 )
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
 
+from core import workspaces as perfis_workspace  # noqa: E402
 from core.config import carregar_env_file  # noqa: E402
 from integrations.github import GitHubClient  # noqa: E402
 from services import clonagem as svc_clonagem  # noqa: E402
@@ -225,6 +226,18 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"DOCX exportados: {dados['total']} | periodo: "
             f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
+    if comando == "perfis":
+        if "perfis" in dados:
+            registros = dados["perfis"]
+            if not registros:
+                return "Nenhum perfil configurado."
+            return "\n".join(
+                _linhas_tabela(
+                    registros,
+                    ("alias", "ativo", "nome", "database_id", "token", "descricao"),
+                )
+            )
+        return _json(dados)
     return _json(dados)
 
 
@@ -617,6 +630,50 @@ def cmd_exportar_docx(args: argparse.Namespace, *, client_factory: ClientFactory
     )
 
 
+def cmd_perfis(args: argparse.Namespace) -> Any:
+    acao = args.acao_perfil
+    if acao == "listar":
+        return perfis_workspace.carregar_store().publico()
+    if acao == "adicionar":
+        perfil = perfis_workspace.adicionar_perfil(
+            alias=args.alias,
+            token=args.token,
+            database_id=_normalizar_texto(args.database),
+            nome=_normalizar_texto(args.nome),
+            descricao=_normalizar_texto(args.descricao),
+            ativar=args.ativar,
+            sobrescrever=args.sobrescrever,
+        )
+        ativo = perfis_workspace.carregar_store().ativo == perfil.alias
+        return {
+            "acao": "adicionado",
+            "perfil": perfil.publico(ativo=ativo),
+            "arquivo": str(perfis_workspace.ARQUIVO_PADRAO),
+        }
+    if acao == "usar":
+        perfil = perfis_workspace.selecionar_perfil(args.alias)
+        perfis_workspace.aplicar_perfil(perfil.alias)
+        return {
+            "acao": "selecionado",
+            "perfil": perfil.publico(ativo=True),
+            "ambiente": {
+                "NOTION_PROFILE": perfil.alias,
+                "NOTION_TOKEN": "definido",
+                "NOTION_DATABASE_ID": "definido" if perfil.database_id else "ausente",
+            },
+        }
+    if acao == "mostrar":
+        perfil = perfis_workspace.resolver_perfil(args.alias)
+        if perfil is None:
+            raise CLIError("Nenhum perfil ativo. Use 'perfis listar' ou 'perfis usar <alias>'.")
+        store = perfis_workspace.carregar_store()
+        return perfil.publico(ativo=perfil.alias == store.ativo)
+    if acao == "remover":
+        perfil = perfis_workspace.remover_perfil(args.alias, confirmar=args.sim)
+        return {"acao": "removido", "perfil": perfil.publico(ativo=False)}
+    raise CLIError(f"Ação de perfis desconhecida: {acao}")
+
+
 #: Exemplos de uso por comando, mostrados pelo ``guia``. Texto curto e copiável.
 EXEMPLOS_GUIA: dict[str, list[str]] = {
     "listar": ['python -m cli --json listar --status "Entrada"'],
@@ -664,6 +721,12 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json exportar-docx --de 2026-07-01 --ate 2026-07-06 --saida ./exports",
         "python -m cli --json exportar-docx --database <database_id> --campo-data Data "
         "--de 2026-07-01 --ate 2026-07-06 --saida ./exports",
+    ],
+    "perfis": [
+        "python -m cli --json perfis adicionar trabalho --token ntn_... "
+        "--database <db_id> --ativar",
+        "python -m cli --json perfis listar",
+        "python -m cli --perfil trabalho --json listar",
     ],
     "guia": ["python -m cli --json guia"],
 }
@@ -723,6 +786,10 @@ def construir_parser() -> argparse.ArgumentParser:
         description="CLI para IA operar tarefas do Notion via services.",
     )
     parser.add_argument("--json", action="store_true", help="emite envelope JSON estável")
+    parser.add_argument(
+        "--perfil",
+        help="alias de workspace salvo em 'perfis'; vence o perfil ativo nesta execução",
+    )
     sub = parser.add_subparsers(dest="comando", required=True)
 
     listar = sub.add_parser("listar", help="lista tarefas")
@@ -925,6 +992,41 @@ def construir_parser() -> argparse.ArgumentParser:
         help="nome da propriedade de data usada no filtro (padrao: Data)",
     )
 
+    perfis = sub.add_parser(
+        "perfis",
+        help="gerencia perfis locais de workspaces/keys do Notion",
+    )
+    sub_perfis = perfis.add_subparsers(dest="acao_perfil", required=True)
+
+    sub_perfis.add_parser("listar", help="lista perfis salvos sem expor tokens")
+
+    adicionar = sub_perfis.add_parser("adicionar", help="salva uma key/workspace local")
+    adicionar.add_argument("alias", help="nome curto: letras, numeros, '-' ou '_'")
+    adicionar.add_argument("--token", required=True, help="token da integração do Notion")
+    adicionar.add_argument("--database", help="database padrão desse workspace")
+    adicionar.add_argument("--nome", help="nome legível do workspace")
+    adicionar.add_argument("--descricao", help="observação curta para diferenciar o perfil")
+    adicionar.add_argument(
+        "--ativar",
+        action="store_true",
+        help="também define este perfil como padrão para próximos comandos",
+    )
+    adicionar.add_argument(
+        "--sobrescrever",
+        action="store_true",
+        help="atualiza o perfil se o alias já existir",
+    )
+
+    usar = sub_perfis.add_parser("usar", help="define o perfil ativo")
+    usar.add_argument("alias")
+
+    mostrar = sub_perfis.add_parser("mostrar", help="mostra um perfil sem expor o token")
+    mostrar.add_argument("alias", nargs="?")
+
+    remover = sub_perfis.add_parser("remover", help="remove um perfil salvo")
+    remover.add_argument("alias")
+    remover.add_argument("--sim", action="store_true", help="confirma a remoção")
+
     sub.add_parser("guia", help="lista todos os comandos com o que fazem e exemplos")
     return parser
 
@@ -939,8 +1041,12 @@ def executar(
     args = parser.parse_args(argv)
     try:
         comando = args.comando
+        if comando not in {"perfis", "guia"}:
+            perfis_workspace.aplicar_perfil(args.perfil)
         if comando == "guia":
             dados = cmd_guia(args)
+        elif comando == "perfis":
+            dados = cmd_perfis(args)
         elif comando == "listar":
             dados = cmd_listar(args, tasklist_factory=tasklist_factory)
         elif comando == "ler":
@@ -992,7 +1098,7 @@ def executar(
         else:
             raise CLIError(f"Comando desconhecido: {comando}")
         return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)
-    except (CLIError, ValueError) as exc:
+    except (CLIError, ValueError, perfis_workspace.WorkspaceConfigError) as exc:
         return 2, _envelope(False, erro=str(exc)) if args.json else f"Erro: {exc}"
     except (NotionHTTPError, NotionAPIError) as exc:
         if isinstance(exc, NotionHTTPError) and exc.status_code == 404:

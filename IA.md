@@ -35,6 +35,10 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
 - [2026-07-08] `start_app.py` adicionado como porta de entrada interativa
   (Instalar / Configurar `.env` / Status / Usar), conforme o contrato de menu de
   entrada do padrão de qualidade.
+- [2026-07-08] Suporte inicial a múltiplos workspaces no CLI por perfis locais:
+  `core/workspaces.py` guarda aliases em `.notion-workspaces.json` (ignorado pelo
+  Git), mascara tokens em saídas públicas e aplica o perfil escolhido ao ambiente
+  antes de criar `NotionClient`/`TaskList`. O `.env` segue compatível como fallback.
 
 ---
 
@@ -61,6 +65,10 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   `CONTRIBUTING.md`, `IA.md`, `start_app.py` (menu de entrada) e CI GitHub Actions.
   Validação: `ruff check .` limpo e 109 testes verdes; menu verificado manualmente
   (Status e fluxo de instalação).
+- [2026-07-08] ✅ Perfis de workspaces/keys adicionados ao CLI (`perfis adicionar`,
+  `perfis listar`, `perfis usar`, `perfis mostrar`, `perfis remover` e `--perfil`).
+  Decisão: entregar primeiro na borda CLI, onde a necessidade operacional já existe,
+  sem levar regra de perfis para os services compartilhados.
 
 ---
 

@@ -17,6 +17,17 @@ export NOTION_TOKEN=ntn_...
 export NOTION_DATABASE_ID=...
 ```
 
+Para operar vários workspaces sem trocar `.env`, salve perfis locais. O arquivo
+`.notion-workspaces.json` é ignorado pelo Git e as saídas mascaram tokens:
+
+```bash
+notion-tasks perfis adicionar cliente --token ntn_... --database <database_id> --ativar
+notion-tasks perfis adicionar pessoal --token ntn_... --database <database_id>
+notion-tasks perfis listar
+notion-tasks --perfil cliente listar
+notion-tasks perfis usar pessoal
+```
+
 Prefere um passo a passo guiado? Clone o repositório e rode o menu de entrada:
 
 ```bash
@@ -34,6 +45,7 @@ notion-tasks mover <id> --status "Concluído"
 notion-tasks concluir <id>
 
 # Workspace
+notion-tasks --perfil cliente listar # executa usando uma key/workspace salvo
 notion-tasks mapear              # resume o inventário do workspace
 notion-tasks buscar <termo>      # pesquisa páginas e databases
 notion-tasks databases           # lista databases visíveis
