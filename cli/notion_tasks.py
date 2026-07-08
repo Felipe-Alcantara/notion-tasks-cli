@@ -909,7 +909,11 @@ def construir_parser() -> argparse.ArgumentParser:
 
     exportar_docx = sub.add_parser(
         "exportar-docx",
-        help="exporta relatorios diarios do Notion para DOCX, um arquivo por dia",
+        help=(
+            "exporta relatorios diarios do Notion para DOCX, um arquivo por dia; "
+            "a saida reproduz o modelo visual dos relatorios, mas e gerada "
+            "programaticamente — acabamento fino pode exigir ajuste manual no Word"
+        ),
     )
     exportar_docx.add_argument("--database", help="database de relatorios; padrao: env")
     exportar_docx.add_argument("--de", required=True, help="data inicial YYYY-MM-DD")
