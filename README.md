@@ -17,6 +17,12 @@ export NOTION_TOKEN=ntn_...
 export NOTION_DATABASE_ID=...
 ```
 
+Prefere um passo a passo guiado? Clone o repositório e rode o menu de entrada:
+
+```bash
+python start_app.py   # Instalar / Configurar .env / Status / Usar
+```
+
 ## Uso
 
 ```bash
