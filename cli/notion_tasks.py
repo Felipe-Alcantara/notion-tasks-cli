@@ -187,7 +187,22 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             cabecalho = dados["aviso"]
             tabela = "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
             return f"{cabecalho}\n\n{tabela}"
-        return dados["markdown"] or "(página sem conteúdo)"
+        # Página = propriedades + corpo: as propriedades vêm PRIMEIRO, porque
+        # há páginas com mais informação nas colunas do que no corpo.
+        partes: list[str] = []
+        propriedades = dados.get("propriedades") or {}
+        if propriedades:
+            linhas_props = "\n".join(
+                f"- {nome}: {valor}"
+                for nome, valor in propriedades.items()
+                if valor not in (None, "", [])
+            )
+            if linhas_props:
+                partes.append(f"## Propriedades\n{linhas_props}")
+        if dados["markdown"]:
+            rotulo = "## Corpo\n" if partes else ""
+            partes.append(f"{rotulo}{dados['markdown']}")
+        return "\n\n".join(partes) or "(página sem propriedades nem conteúdo)"
     if comando == "linhas":
         return "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
     if comando == "blocos":
@@ -870,6 +885,16 @@ def cmd_guia(args: argparse.Namespace) -> Any:
             "em qualquer comando mostra os argumentos."
         ),
         "fluxo_recomendado": [
+            "REGRA DO LINK: ao receber um link ou ID do Notion, LEIA e entenda "
+            "do que se trata ANTES de qualquer mudança ('conteudo <id>'; se for "
+            "database, 'linhas <id>'). Se o alvo é um database, o trabalho é nas "
+            "LINHAS: localize a linha certa e atualize-a — NUNCA ignore o "
+            "database criando blocos soltos abaixo dele.",
+            "REGRA DE LEITURA: propriedades e corpo são partes da MESMA página. "
+            "Toda página deve começar a ser lida pelas propriedades (as colunas) "
+            "e só depois pelo corpo — há páginas com mais informação nas "
+            "propriedades do que no corpo. 'conteudo <page_id>' já devolve as "
+            "duas partes, propriedades primeiro.",
             "REGRA: ao trabalhar numa página que é linha de um database, edite "
             "PRIMEIRO as propriedades (as colunas) e SÓ DEPOIS o conteúdo (o corpo).",
             "1. Propriedades (colunas: status, datas, seleções, relações…) → "

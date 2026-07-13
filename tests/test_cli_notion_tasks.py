@@ -287,6 +287,12 @@ class FakeCloneClient(FakeClient):
 class FakeDatabaseClient(FakeClient):
     """Cliente onde o ID consultado é um database (blocos vazios, com linhas)."""
 
+    def obter_pagina(self, page_id):
+        # Como na API real: GET /pages/<database_id> responde 404.
+        from notion_starter import NotionHTTPError
+
+        raise NotionHTTPError(404, "não é uma página")
+
     def ler_blocos(self, block_id, page_size=100, buscar_todos=False, recursivo=False):
         return []
 
@@ -702,7 +708,21 @@ def test_conteudo_de_pagina_sem_corpo_nao_inventa_linhas():
     client.ler_blocos = lambda *a, **k: []
     codigo, saida = _executar(["--json", "conteudo", "page1"], client=client)
     assert codigo == 0
-    assert saida["dados"] == {"id": "page1", "tipo": "pagina", "markdown": ""}
+    # Página = propriedades + corpo: mesmo sem corpo, as propriedades
+    # preenchidas vêm no resultado (e vêm primeiro).
+    assert saida["dados"] == {
+        "id": "page1",
+        "tipo": "pagina",
+        "propriedades": {"Status": "Inbox"},
+        "markdown": "",
+    }
+
+
+def test_conteudo_traz_propriedades_antes_do_corpo():
+    codigo, saida = _executar(["conteudo", "page1"])
+    assert codigo == 0
+    assert saida.index("Propriedades") < saida.index("Corpo")
+    assert "Status: Inbox" in saida
 
 
 def test_linhas_lista_linhas_do_database():
