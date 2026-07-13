@@ -29,6 +29,9 @@ from notion_starter import (  # noqa: E402
     TaskList,
     construir_inventario,
 )
+from notion_starter import properties as starter_properties  # noqa: E402
+from notion_starter.services import anexos as svc_anexos  # noqa: E402
+from notion_starter.services import ingestao as svc_ingestao  # noqa: E402
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
 
 from core import workspaces as perfis_workspace  # noqa: E402
@@ -630,6 +633,87 @@ def cmd_exportar_docx(args: argparse.Namespace, *, client_factory: ClientFactory
     )
 
 
+def cmd_criar_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    titulo = _texto_obrigatorio(args.titulo, "titulo")
+    tipos = _pares_chave_valor(args.prop, "--prop")
+
+    propriedades: dict[str, dict[str, object]] = {}
+    for nome, tipo in tipos.items():
+        propriedades[nome] = starter_properties.schema_propriedade(tipo)
+    if not any("title" in fragmento for fragmento in propriedades.values()):
+        propriedades["Nome"] = starter_properties.schema_propriedade("titulo")
+
+    resultado = client_factory().criar_database(
+        pagina_id,
+        titulo,
+        propriedades,
+        is_inline=args.inline,
+        icone=_normalizar_texto(args.icone),
+        descricao=_normalizar_texto(args.descricao),
+        prefixo_id=_normalizar_texto(args.prefixo_id),
+    )
+    return {
+        "id": resultado.get("id", ""),
+        "titulo": titulo,
+        "url": resultado.get("url"),
+        "propriedades": sorted(propriedades),
+    }
+
+
+def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    caminho = _texto_obrigatorio(args.caminho, "caminho")
+    fonte = svc_ingestao.FontePlanilha(
+        caminho,
+        aba=_normalizar_texto(args.aba),
+        coluna_titulo=_normalizar_texto(args.coluna_titulo),
+        tipos=_pares_chave_valor(args.tipo, "--tipo"),
+        renomear=_pares_chave_valor(args.renomear, "--renomear"),
+    )
+    resultado = svc_ingestao.ingerir(fonte, client=client_factory(), database_id=database_id)
+    return {
+        "database_id": database_id,
+        "arquivo": caminho,
+        "criados": resultado.criados,
+        "atualizados": resultado.atualizados,
+        "erros": resultado.erros,
+        "itens_processados": resultado.itens_processados,
+    }
+
+
+def cmd_anexar_arquivo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    return svc_anexos.anexar_arquivo(
+        _texto_obrigatorio(args.page_id, "page_id"),
+        _texto_obrigatorio(args.caminho, "caminho"),
+        propriedade=_normalizar_texto(args.propriedade) or "Arquivos e mídia",
+        substituir=args.substituir,
+        cliente=client_factory(),
+    )
+
+
+def cmd_mover_pagina(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    destino = _texto_obrigatorio(args.novo_pai_id, "novo_pai_id")
+    client_factory().mover_pagina(page_id, destino, tipo_pai=args.tipo_pai)
+    return {
+        "id": page_id,
+        "novo_pai": destino,
+        "tipo_pai": args.tipo_pai,
+        "aviso": (
+            "Se esta página CONTÉM databases, a API aceita mas ignora o movimento: "
+            "mova cada database com 'mover-database' e descarte a página vazia."
+        ),
+    }
+
+
+def cmd_mover_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    destino = _texto_obrigatorio(args.novo_pai_id, "novo_pai_id")
+    client_factory().mover_database(database_id, destino)
+    return {"id": database_id, "novo_pai": destino}
+
+
 def cmd_perfis(args: argparse.Namespace) -> Any:
     acao = args.acao_perfil
     if acao == "listar":
@@ -721,6 +805,29 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json exportar-docx --de 2026-07-01 --ate 2026-07-06 --saida ./exports",
         "python -m cli --json exportar-docx --database <database_id> --campo-data Data "
         "--de 2026-07-01 --ate 2026-07-06 --saida ./exports",
+    ],
+    "criar-database": [
+        'python -m cli --json criar-database <pagina_id> "Cadastro" '
+        '--prop "Seguidores=numero" --prop "Plataforma=select" '
+        '--prefixo-id DVIP --icone 📇 --descricao "Contas do projeto"',
+    ],
+    "importar-planilha": [
+        "python -m cli --json importar-planilha <database_id> contas.xlsx "
+        '--aba Contas --tipo "Seguidores=numero" --tipo "Criada em=data"',
+        "python -m cli --json importar-planilha <database_id> contas.csv "
+        '--renomear "Email=E-mail de acesso"',
+    ],
+    "anexar-arquivo": [
+        "python -m cli --json anexar-arquivo <page_id> relatorio.docx",
+        'python -m cli --json anexar-arquivo <page_id> foto.png --propriedade "Anexos" '
+        "--substituir",
+    ],
+    "mover-pagina": [
+        "python -m cli --json mover-pagina <page_id> <nova_pagina_pai_id>",
+        "python -m cli --json mover-pagina <page_id> <database_id> --tipo-pai database_id",
+    ],
+    "mover-database": [
+        "python -m cli --json mover-database <database_id> <nova_pagina_pai_id>",
     ],
     "perfis": [
         "python -m cli --json perfis adicionar trabalho --token ntn_... "
@@ -992,6 +1099,92 @@ def construir_parser() -> argparse.ArgumentParser:
         help="nome da propriedade de data usada no filtro (padrao: Data)",
     )
 
+    criar_database = sub.add_parser(
+        "criar-database",
+        help="cria um database numa página, com schema tipado a partir de --prop",
+    )
+    criar_database.add_argument("pagina_id", help="página que recebe o database")
+    criar_database.add_argument("titulo")
+    criar_database.add_argument(
+        "--prop",
+        action="append",
+        help='coluna no formato "Nome=tipo" (tipos: titulo, texto, numero, data, '
+        "select, multi_select, checkbox, email, url, telefone, pessoas, arquivos); "
+        "sem coluna 'titulo', uma propriedade 'Nome' é criada",
+    )
+    criar_database.add_argument(
+        "--inline", action="store_true", help="cria embutido no corpo da página"
+    )
+    criar_database.add_argument("--icone", help="emoji usado como ícone")
+    criar_database.add_argument("--descricao", help="descrição do database")
+    criar_database.add_argument(
+        "--prefixo-id",
+        dest="prefixo_id",
+        help="cria propriedade ID (unique_id) com este prefixo — único por workspace",
+    )
+
+    importar_planilha = sub.add_parser(
+        "importar-planilha",
+        help="importa .xlsx/.csv para um database (upsert idempotente por Origem)",
+    )
+    importar_planilha.add_argument("database_id", help="database de destino")
+    importar_planilha.add_argument("caminho", help="arquivo .xlsx ou .csv")
+    importar_planilha.add_argument("--aba", help="aba do .xlsx (padrão: a ativa)")
+    importar_planilha.add_argument(
+        "--coluna-titulo",
+        dest="coluna_titulo",
+        help="coluna usada como título da linha (padrão: a primeira)",
+    )
+    importar_planilha.add_argument(
+        "--tipo",
+        action="append",
+        help='tipo de coluna no formato "Coluna=tipo" (numero, data, select, '
+        "checkbox, email, url, telefone; padrão: texto). Números e datas aceitam "
+        "formato brasileiro; valores inválidos vão para Observações",
+    )
+    importar_planilha.add_argument(
+        "--renomear",
+        action="append",
+        help='mapeia coluna para propriedade: "Coluna=Nome no Notion"',
+    )
+
+    anexar = sub.add_parser(
+        "anexar-arquivo",
+        help="sobe um arquivo local (até 20 MB) e anexa numa propriedade de arquivos",
+    )
+    anexar.add_argument("page_id", help="linha de database que recebe o anexo")
+    anexar.add_argument("caminho", help="arquivo local")
+    anexar.add_argument(
+        "--propriedade",
+        help='nome da propriedade de arquivos (padrão: "Arquivos e mídia")',
+    )
+    anexar.add_argument(
+        "--substituir",
+        action="store_true",
+        help="troca os anexos existentes em vez de acrescentar",
+    )
+
+    mover_pagina = sub.add_parser(
+        "mover-pagina",
+        help="move (re-parenteia) uma página para outra página ou database",
+    )
+    mover_pagina.add_argument("page_id")
+    mover_pagina.add_argument("novo_pai_id")
+    mover_pagina.add_argument(
+        "--tipo-pai",
+        dest="tipo_pai",
+        choices=("page_id", "database_id"),
+        default="page_id",
+        help="tipo do novo pai (padrão: page_id)",
+    )
+
+    mover_database = sub.add_parser(
+        "mover-database",
+        help="move (re-parenteia) um database inteiro para outra página",
+    )
+    mover_database.add_argument("database_id")
+    mover_database.add_argument("novo_pai_id")
+
     perfis = sub.add_parser(
         "perfis",
         help="gerencia perfis locais de workspaces/keys do Notion",
@@ -1095,6 +1288,16 @@ def executar(
             dados = cmd_atualizar_github(args, client_factory=client_factory)
         elif comando == "exportar-docx":
             dados = cmd_exportar_docx(args, client_factory=client_factory)
+        elif comando == "criar-database":
+            dados = cmd_criar_database(args, client_factory=client_factory)
+        elif comando == "importar-planilha":
+            dados = cmd_importar_planilha(args, client_factory=client_factory)
+        elif comando == "anexar-arquivo":
+            dados = cmd_anexar_arquivo(args, client_factory=client_factory)
+        elif comando == "mover-pagina":
+            dados = cmd_mover_pagina(args, client_factory=client_factory)
+        elif comando == "mover-database":
+            dados = cmd_mover_database(args, client_factory=client_factory)
         else:
             raise CLIError(f"Comando desconhecido: {comando}")
         return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)

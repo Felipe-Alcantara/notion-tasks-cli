@@ -978,3 +978,135 @@ def test_exportar_docx_humano_resume(monkeypatch, tmp_path: Path):
 
     assert codigo == 0
     assert "DOCX exportados: 2" in saida
+
+
+# -- criar-database / importar-planilha / anexar-arquivo / mover ------------
+
+
+class FakeNovosClient:
+    def __init__(self):
+        self.chamadas: list[tuple[str, object]] = []
+        self.pagina = {"properties": {}}
+
+    def criar_database(self, pagina_id, titulo, propriedades, **kwargs):
+        self.chamadas.append(("criar_database", (pagina_id, titulo, propriedades, kwargs)))
+        return {"id": "db_novo", "url": "https://notion.so/db_novo"}
+
+    def mover_pagina(self, page_id, novo_pai_id, *, tipo_pai="page_id"):
+        self.chamadas.append(("mover_pagina", (page_id, novo_pai_id, tipo_pai)))
+        return {"id": page_id}
+
+    def mover_database(self, database_id, novo_pai_id):
+        self.chamadas.append(("mover_database", (database_id, novo_pai_id)))
+        return {"id": database_id}
+
+    def enviar_arquivo(self, conteudo, nome, content_type):
+        self.chamadas.append(("enviar_arquivo", (nome, content_type)))
+        return "upload-1"
+
+    def obter_pagina(self, page_id):
+        return self.pagina
+
+    def atualizar_pagina(self, page_id, props):
+        self.chamadas.append(("atualizar_pagina", (page_id, props)))
+        return {"id": page_id}
+
+    def consultar_database(self, database_id, page_size=1, filtro=None):
+        return []
+
+    def criar_pagina(self, database_id, props):
+        self.chamadas.append(("criar_pagina", (database_id, props)))
+        return {"id": "linha-nova"}
+
+
+def test_criar_database_monta_schema_e_atalhos():
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        [
+            "--json",
+            "criar-database",
+            "pag1",
+            "Cadastro",
+            "--prop",
+            "Seguidores=numero",
+            "--prop",
+            "Plataforma=select",
+            "--prefixo-id",
+            "DVIP",
+            "--inline",
+        ],
+        client=fake,
+    )
+    assert codigo == 0
+    assert saida["dados"]["id"] == "db_novo"
+    nome, (pagina, titulo, props, kwargs) = fake.chamadas[0]
+    assert props["Seguidores"] == {"number": {}}
+    assert props["Nome"] == {"title": {}}  # título automático
+    assert kwargs["prefixo_id"] == "DVIP"
+    assert kwargs["is_inline"] is True
+
+
+def test_criar_database_tipo_invalido_da_erro_de_uso():
+    codigo, saida = _executar(
+        ["--json", "criar-database", "pag1", "X", "--prop", "Valor=moeda"],
+        client=FakeNovosClient(),
+    )
+    assert codigo == 2
+    assert "Tipos aceitos" in str(saida["erro"])
+
+
+def test_importar_planilha_csv_upsert(tmp_path):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome,Seguidores\nConta A,1.614\n", encoding="utf-8")
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha), "--tipo", "Seguidores=numero"],
+        client=fake,
+    )
+    assert codigo == 0
+    assert saida["dados"]["criados"] == 1
+    props = [c for c in fake.chamadas if c[0] == "criar_pagina"][0][1][1]
+    assert props["Seguidores"] == {"number": 1614}
+
+
+def test_anexar_arquivo_sobe_e_grava_propriedade(tmp_path):
+    arquivo = tmp_path / "rel.docx"
+    arquivo.write_bytes(b"x")
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "anexar-arquivo", "pag1", str(arquivo)], client=fake
+    )
+    assert codigo == 0
+    assert saida["dados"]["upload_id"] == "upload-1"
+    atualizacao = [c for c in fake.chamadas if c[0] == "atualizar_pagina"][0]
+    assert "Arquivos e mídia" in atualizacao[1][1]
+
+
+def test_mover_pagina_avisa_sobre_databases():
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "mover-pagina", "pag1", "pai2", "--tipo-pai", "database_id"],
+        client=fake,
+    )
+    assert codigo == 0
+    assert ("mover_pagina", ("pag1", "pai2", "database_id")) in fake.chamadas
+    assert "mover-database" in saida["dados"]["aviso"]
+
+
+def test_mover_database_reparenteia():
+    fake = FakeNovosClient()
+    codigo, saida = _executar(["--json", "mover-database", "db1", "pai2"], client=fake)
+    assert codigo == 0
+    assert ("mover_database", ("db1", "pai2")) in fake.chamadas
+
+
+def test_guia_inclui_comandos_novos():
+    codigo, saida = _executar(["--json", "guia"])
+    comandos = {c["comando"] for c in saida["dados"]["comandos"]}
+    assert {
+        "criar-database",
+        "importar-planilha",
+        "anexar-arquivo",
+        "mover-pagina",
+        "mover-database",
+    } <= comandos
