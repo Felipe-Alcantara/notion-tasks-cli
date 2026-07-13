@@ -69,6 +69,11 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   `perfis listar`, `perfis usar`, `perfis mostrar`, `perfis remover` e `--perfil`).
   Decisão: entregar primeiro na borda CLI, onde a necessidade operacional já existe,
   sem levar regra de perfis para os services compartilhados.
+- [2026-07-13] ✅ Novos subcomandos como bordas finas sobre o notion-starter:
+  `criar-database` (schema tipado via --prop), `importar-planilha` (.xlsx/.csv,
+  upsert idempotente por Origem, tipos BR), `anexar-arquivo` (File Upload API,
+  preservando anexos) e `mover-pagina`/`mover-database` (re-parent). Validação:
+  124 testes verdes e ruff limpo.
 
 ---
 
