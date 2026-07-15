@@ -694,7 +694,9 @@ def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFac
         "atualizados": resultado.atualizados,
         "erros": resultado.erros,
         "itens_processados": resultado.itens_processados,
-        "falhas": resultado.falhas,
+        # Mantém a borda compatível durante atualizações em que o CLI chega
+        # antes da versão do notion-starter que introduziu ResultadoIngestao.falhas.
+        "falhas": getattr(resultado, "falhas", []),
     }
 
 

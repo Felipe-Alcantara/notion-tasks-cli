@@ -1108,6 +1108,27 @@ def test_importar_planilha_relata_motivo_das_falhas(tmp_path):
     ]
 
 
+def test_importar_planilha_aceita_resultado_de_starter_anterior(tmp_path, monkeypatch):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome\nConta A\n", encoding="utf-8")
+
+    class ResultadoLegado:
+        criados = 1
+        atualizados = 0
+        erros = 0
+        itens_processados = 1
+
+    monkeypatch.setattr(cli.svc_ingestao, "ingerir", lambda *args, **kwargs: ResultadoLegado())
+
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha)],
+        client=FakeNovosClient(),
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["falhas"] == []
+
+
 def test_anexar_arquivo_sobe_e_grava_propriedade(tmp_path):
     arquivo = tmp_path / "rel.docx"
     arquivo.write_bytes(b"x")
