@@ -1089,6 +1089,46 @@ def test_importar_planilha_csv_upsert(tmp_path):
     assert props["Seguidores"] == {"number": 1614}
 
 
+def test_importar_planilha_relata_motivo_das_falhas(tmp_path):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome,Seguidores\nConta A,1.614\n", encoding="utf-8")
+
+    class FakeQueRejeita(FakeNovosClient):
+        def criar_pagina(self, database_id, props):
+            raise RuntimeError("Nome is not a property that exists")
+
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha)],
+        client=FakeQueRejeita(),
+    )
+    assert codigo == 0
+    assert saida["dados"]["erros"] == 1
+    assert saida["dados"]["falhas"] == [
+        "Conta A (contas.csv:2): Nome is not a property that exists"
+    ]
+
+
+def test_importar_planilha_aceita_resultado_de_starter_anterior(tmp_path, monkeypatch):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome\nConta A\n", encoding="utf-8")
+
+    class ResultadoLegado:
+        criados = 1
+        atualizados = 0
+        erros = 0
+        itens_processados = 1
+
+    monkeypatch.setattr(cli.svc_ingestao, "ingerir", lambda *args, **kwargs: ResultadoLegado())
+
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha)],
+        client=FakeNovosClient(),
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["falhas"] == []
+
+
 def test_anexar_arquivo_sobe_e_grava_propriedade(tmp_path):
     arquivo = tmp_path / "rel.docx"
     arquivo.write_bytes(b"x")
