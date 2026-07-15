@@ -694,6 +694,7 @@ def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFac
         "atualizados": resultado.atualizados,
         "erros": resultado.erros,
         "itens_processados": resultado.itens_processados,
+        "falhas": resultado.falhas,
     }
 
 
