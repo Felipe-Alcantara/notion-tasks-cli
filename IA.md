@@ -12,6 +12,22 @@
 
 ---
 
+## 📊 ESTADO ATUAL (RESUMO VIVO)
+
+Última atualização: [2026-07-18]
+
+- Fase: CLI funcional e instalável, com saída JSON estável e perfis para múltiplos
+  workspaces.
+- Qualidade: 127 testes verdes e `ruff` limpo; CI cobre Python 3.10–3.13.
+- Documentação: README alinhado ao Felixo System Design e contrato de qualidade
+  centralizado em `QUALIDADE.md`.
+- Próximos passos abertos: escrita multi-fonte, paginação de saídas grandes e
+  melhorias de distribuição.
+- Risco conhecido: ambientes consumidores devem fixar sua própria resolução de
+  dependências quando precisarem de builds reproduzíveis.
+
+---
+
 ## 🎯 OBJETIVO DO PROJETO
 
 [2026-07-02] `notion-tasks-cli` é a CLI do ecossistema para pessoas e IAs
@@ -74,6 +90,12 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   upsert idempotente por Origem, tipos BR), `anexar-arquivo` (File Upload API,
   preservando anexos) e `mover-pagina`/`mover-database` (re-parent). Validação:
   124 testes verdes e ruff limpo.
+- [2026-07-18] ✅ Documentação alinhada ao Felixo System Design: README passou a
+  ter badges, índice, árvore real, guia operacional e rodapé open source;
+  `QUALIDADE.md` centralizou o gate e registrou a exceção motivada de versões
+  mínimas para um CLI instalável. Motivo: facilitar uso e contribuição sem impor
+  pins incompatíveis ao ambiente consumidor. Validação: 127 testes verdes e
+  `ruff` limpo.
 
 ---
 
