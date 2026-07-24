@@ -97,6 +97,14 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   pins incompatíveis ao ambiente consumidor. Validação: 127 testes verdes e
   `ruff` limpo.
 
+- [2026-07-23] ✅ `atualizar-github --contas` passa a aceitar repositório
+  específico (`owner/repo`/URL do repo), não só contas inteiras — mudança feita
+  na implementação real em `notion-starter` (`services/inventario_github.py`,
+  este módulo consome via shim). Motivo: trazer um projeto pontual de terceiros
+  para o database sem importar toda a conta dele. Testes cobrindo o
+  reconhecimento de formato e a coleta sem duplicar em
+  `tests/test_services_inventario_github.py`; 132 testes verdes, ruff limpo.
+
 ---
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases
