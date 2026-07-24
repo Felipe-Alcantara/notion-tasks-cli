@@ -39,6 +39,7 @@ from core.config import carregar_env_file  # noqa: E402
 from integrations.github import GitHubClient  # noqa: E402
 from services import clonagem as svc_clonagem  # noqa: E402
 from services import conteudo as svc_conteudo  # noqa: E402
+from services import estrutura_projeto as svc_estrutura  # noqa: E402
 from services import inventario_github as svc_inventario  # noqa: E402
 from services import normalizacao as svc_normalizacao  # noqa: E402
 from services import propriedades as svc_propriedades  # noqa: E402
@@ -212,6 +213,21 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"Clone criado: {dados['titulo']} ({dados['id']})\n"
             f"Propriedades: {len(dados['propriedades'])} | "
             f"linhas copiadas: {dados['linhas_copiadas']}"
+        )
+    if comando == "criar-subpagina":
+        return f"Subpágina criada: {dados['titulo']} ({dados['id']})\nURL: {dados['url']}"
+    if comando == "inspecionar-estrutura":
+        return _json(dados)
+    if comando == "clonar-estrutura":
+        return (
+            f"Subpáginas criadas: {len(dados['subpaginas_criadas'])} | "
+            f"databases clonados: {len(dados['databases_clonados'])} | "
+            f"ignorados: {len(dados['ignorados'])}"
+        )
+    if comando == "montar-estrutura-projeto":
+        return (
+            f"Subpáginas criadas: {', '.join(dados['subpaginas_criadas'])}\n"
+            f"Databases criados: {', '.join(dados['databases_criados'])}"
         )
     if comando == "database-atual":
         if not dados["database_id"]:
@@ -590,6 +606,54 @@ def cmd_clonar_database(args: argparse.Namespace, *, client_factory: ClientFacto
     )
 
 
+def cmd_criar_subpagina(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    pagina_pai_id = _texto_obrigatorio(args.pagina_pai_id, "pagina_pai_id")
+    titulo = _texto_obrigatorio(args.titulo, "titulo")
+    criada = svc_estrutura.criar_subpagina(
+        pagina_pai_id,
+        titulo,
+        markdown=_normalizar_texto(args.conteudo) or None,
+        cliente=client_factory(),
+    )
+    return {"id": criada.get("id"), "url": criada.get("url"), "titulo": titulo}
+
+
+def cmd_inspecionar_estrutura(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    arvore = svc_estrutura.inspecionar_estrutura(
+        pagina_id,
+        profundidade=args.profundidade,
+        cliente=client_factory(),
+    )
+    return arvore.para_dict()
+
+
+def cmd_clonar_estrutura(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    referencia_id = _texto_obrigatorio(args.pagina_referencia_id, "pagina_referencia_id")
+    destino_id = _texto_obrigatorio(args.pagina_destino_id, "pagina_destino_id")
+    resumo = svc_estrutura.clonar_estrutura_projeto(
+        referencia_id,
+        destino_id,
+        cliente=client_factory(),
+    )
+    return {
+        "subpaginas_criadas": resumo.subpaginas_criadas,
+        "databases_clonados": resumo.databases_clonados,
+        "ignorados": resumo.ignorados,
+    }
+
+
+def cmd_montar_estrutura_projeto(
+    args: argparse.Namespace, *, client_factory: ClientFactory
+) -> Any:
+    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    resumo = svc_estrutura.montar_estrutura_projeto(pagina_id, cliente=client_factory())
+    return {
+        "subpaginas_criadas": resumo.subpaginas_criadas,
+        "databases_criados": resumo.databases_criados,
+    }
+
+
 def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
     return {
         "repos_encontrados": resumo.repos_encontrados,
@@ -811,6 +875,20 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "clonar-database": [
         "python -m cli --json clonar-database <database_id>",
         'python -m cli --json clonar-database <database_id> --titulo "Cópia" --com-linhas',
+    ],
+    "criar-subpagina": [
+        'python -m cli --json criar-subpagina <pagina_pai_id> "Estado atual"',
+        'python -m cli --json criar-subpagina <pagina_pai_id> "README" --conteudo "# Título"',
+    ],
+    "inspecionar-estrutura": [
+        "python -m cli --json inspecionar-estrutura <pagina_id>",
+        "python -m cli --json inspecionar-estrutura <pagina_id> --profundidade 1",
+    ],
+    "clonar-estrutura": [
+        "python -m cli --json clonar-estrutura <pagina_referencia_id> <pagina_destino_id>",
+    ],
+    "montar-estrutura-projeto": [
+        "python -m cli --json montar-estrutura-projeto <pagina_id>",
     ],
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
@@ -1080,6 +1158,44 @@ def construir_parser() -> argparse.ArgumentParser:
         "texto: relações viram texto sem vínculo",
     )
 
+    criar_subpagina = sub.add_parser(
+        "criar-subpagina",
+        help="cria uma página filha simples dentro de outra página (não é linha de database)",
+    )
+    criar_subpagina.add_argument("pagina_pai_id")
+    criar_subpagina.add_argument("titulo")
+    criar_subpagina.add_argument(
+        "--conteudo", help="Markdown opcional já preenchido na criação da subpágina"
+    )
+
+    inspecionar_estrutura = sub.add_parser(
+        "inspecionar-estrutura",
+        help="lê recursivamente a árvore de subpáginas/databases de uma página, "
+        "para investigar o padrão de um projeto de referência sem editar nada",
+    )
+    inspecionar_estrutura.add_argument("pagina_id")
+    inspecionar_estrutura.add_argument(
+        "--profundidade",
+        type=int,
+        default=3,
+        help="quantos níveis de subpágina descer (padrão: 3)",
+    )
+
+    clonar_estrutura = sub.add_parser(
+        "clonar-estrutura",
+        help="copia a forma de uma página de projeto (títulos de subpágina, schema de "
+        "databases) para outra página, sem herdar o conteúdo específico da origem",
+    )
+    clonar_estrutura.add_argument("pagina_referencia_id")
+    clonar_estrutura.add_argument("pagina_destino_id")
+
+    montar_estrutura_projeto = sub.add_parser(
+        "montar-estrutura-projeto",
+        help="aplica o padrão fixo de projeto do workspace (## Acompanhamento com 4 "
+        "subpáginas + ## Planejamento e documentação com 2 databases) numa página",
+    )
+    montar_estrutura_projeto.add_argument("pagina_id")
+
     atualizar_github = sub.add_parser(
         "atualizar-github",
         help="re-sincroniza o database GITHUB (repos novos, propriedades, README mudado)",
@@ -1312,6 +1428,14 @@ def executar(
             dados = cmd_buscar(args, client_factory=client_factory)
         elif comando == "clonar-database":
             dados = cmd_clonar_database(args, client_factory=client_factory)
+        elif comando == "criar-subpagina":
+            dados = cmd_criar_subpagina(args, client_factory=client_factory)
+        elif comando == "inspecionar-estrutura":
+            dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
+        elif comando == "clonar-estrutura":
+            dados = cmd_clonar_estrutura(args, client_factory=client_factory)
+        elif comando == "montar-estrutura-projeto":
+            dados = cmd_montar_estrutura_projeto(args, client_factory=client_factory)
         elif comando == "atualizar-github":
             dados = cmd_atualizar_github(args, client_factory=client_factory)
         elif comando == "exportar-docx":

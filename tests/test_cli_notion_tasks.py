@@ -247,6 +247,10 @@ class FakeClient:
         self.chamadas.append(("excluir_bloco", block_id))
         return {"id": block_id, "archived": True}
 
+    def criar_subpagina(self, pagina_pai_id, titulo, *, blocos=None):
+        self.chamadas.append(("criar_subpagina", (pagina_pai_id, titulo)))
+        return {"id": f"sub-{titulo}", "url": f"https://notion.so/sub-{titulo}"}
+
     def consultar_data_source(self, data_source_id, page_size=100, buscar_todos=False, filtro=None):
         self.chamadas.append(("consultar_data_source", data_source_id))
         return []
@@ -794,6 +798,84 @@ def test_clonar_database_humano_resume():
     codigo, saida = _executar(["clonar-database", "db1"], client=FakeCloneClient())
     assert codigo == 0
     assert "Clone criado" in saida
+
+
+class FakeEstruturaClient(FakeClient):
+    """Cliente que sustenta o fluxo de estrutura de projeto (subpáginas/databases)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocos_por_pagina: dict[str, list[dict]] = {}
+
+    def ler_blocos(self, block_id, page_size=100, buscar_todos=False, recursivo=False):
+        self.chamadas.append(("ler_blocos", block_id))
+        return self.blocos_por_pagina.get(block_id, [])
+
+    def criar_database(self, pagina_id, titulo, propriedades, **kwargs):
+        self.chamadas.append(("criar_database", (pagina_id, titulo)))
+        return {"id": f"db-{titulo}"}
+
+
+def test_guia_inclui_comandos_de_estrutura():
+    codigo, saida = _executar(["--json", "guia"])
+    comandos = {c["comando"] for c in saida["dados"]["comandos"]}
+    assert {
+        "criar-subpagina",
+        "inspecionar-estrutura",
+        "clonar-estrutura",
+        "montar-estrutura-projeto",
+    } <= comandos
+
+
+def test_criar_subpagina_cria_pagina_filha():
+    cliente = FakeEstruturaClient()
+    codigo, saida = _executar(
+        ["--json", "criar-subpagina", "pagina_pai", "Estado atual"], client=cliente
+    )
+    assert codigo == 0
+    assert saida["dados"]["titulo"] == "Estado atual"
+    assert ("criar_subpagina", ("pagina_pai", "Estado atual")) in cliente.chamadas
+
+
+def test_inspecionar_estrutura_le_arvore_recursiva():
+    cliente = FakeEstruturaClient()
+    cliente.blocos_por_pagina["raiz"] = [
+        {"id": "p1", "type": "child_page", "child_page": {"title": "README"}}
+    ]
+    cliente.blocos_por_pagina["p1"] = []
+
+    codigo, saida = _executar(["--json", "inspecionar-estrutura", "raiz"], client=cliente)
+
+    assert codigo == 0
+    filhos = saida["dados"]["filhos"]
+    assert filhos[0]["titulo"] == "README"
+
+
+def test_clonar_estrutura_recria_subpaginas_no_destino():
+    cliente = FakeEstruturaClient()
+    cliente.blocos_por_pagina["ref"] = [
+        {"id": "p1", "type": "child_page", "child_page": {"title": "Estado atual"}}
+    ]
+
+    codigo, saida = _executar(
+        ["--json", "clonar-estrutura", "ref", "destino"], client=cliente
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["subpaginas_criadas"] == ["Estado atual"]
+    assert ("criar_subpagina", ("destino", "Estado atual")) in cliente.chamadas
+
+
+def test_montar_estrutura_projeto_cria_padrao_completo():
+    cliente = FakeEstruturaClient()
+
+    codigo, saida = _executar(
+        ["--json", "montar-estrutura-projeto", "pagina"], client=cliente
+    )
+
+    assert codigo == 0
+    assert len(saida["dados"]["subpaginas_criadas"]) == 4
+    assert len(saida["dados"]["databases_criados"]) == 2
 
 
 # -- atualizar-github ------------------------------------------------------

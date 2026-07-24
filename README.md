@@ -131,6 +131,12 @@ notion-tasks apagar-bloco <id> --sim
 notion-tasks limpar <id> --sim
 notion-tasks clonar-database <id>
 
+# Estrutura de projeto (subpáginas, databases, padrão do workspace)
+notion-tasks criar-subpagina <pagina_pai_id> "Estado atual"
+notion-tasks inspecionar-estrutura <pagina_id> --profundidade 3
+notion-tasks clonar-estrutura <pagina_referencia_id> <pagina_destino_id>
+notion-tasks montar-estrutura-projeto <pagina_id>
+
 # Relatórios diários
 notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports
 ```

@@ -105,6 +105,14 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   reconhecimento de formato e a coleta sem duplicar em
   `tests/test_services_inventario_github.py`; 132 testes verdes, ruff limpo.
 
+- [2026-07-23] ✅ Quatro novos subcomandos como bordas finas sobre o
+  `notion-starter` (`services/estrutura_projeto.py`): `criar-subpagina`,
+  `inspecionar-estrutura`, `clonar-estrutura` e `montar-estrutura-projeto` —
+  cobrem investigar e replicar a moldura fixa de projeto do workspace
+  (README + Acompanhamento com 4 subpáginas + Planejamento e documentação com
+  2 databases). Testes de CLI ponta a ponta com `FakeEstruturaClient` em
+  `tests/test_cli_notion_tasks.py`; 137 testes verdes, ruff limpo.
+
 ---
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases
