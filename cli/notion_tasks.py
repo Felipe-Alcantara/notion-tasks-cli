@@ -43,6 +43,7 @@ from services import estrutura_projeto as svc_estrutura  # noqa: E402
 from services import inventario_github as svc_inventario  # noqa: E402
 from services import normalizacao as svc_normalizacao  # noqa: E402
 from services import propriedades as svc_propriedades  # noqa: E402
+from services import reordenacao as svc_reordenacao  # noqa: E402
 from services import tarefas as svc  # noqa: E402
 
 carregar_env_file()
@@ -228,6 +229,12 @@ def _formatar_humano(comando: str, dados: Any) -> str:
         return (
             f"Subpáginas criadas: {', '.join(dados['subpaginas_criadas'])}\n"
             f"Databases criados: {', '.join(dados['databases_criados'])}"
+        )
+    if comando == "reordenar-bloco":
+        aviso = " (ID mudou!)" if dados["id_mudou"] else ""
+        return (
+            f"Bloco {dados['bloco_id_antigo']} ({dados['tipo']}) reordenado -> "
+            f"{dados['bloco_id_novo']}{aviso}\nBackup: {dados['backup_path']}"
         )
     if comando == "database-atual":
         if not dados["database_id"]:
@@ -654,6 +661,35 @@ def cmd_montar_estrutura_projeto(
     }
 
 
+def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    bloco_id = _texto_obrigatorio(args.bloco_id, "bloco_id")
+
+    apos = _normalizar_texto(args.apos)
+    if bool(apos) == bool(args.inicio):
+        raise CLIError("Informe exatamente um entre --apos <bloco_id> e --inicio.")
+
+    try:
+        resultado = svc_reordenacao.reordenar_bloco(
+            pagina_id,
+            bloco_id,
+            apos_bloco_id=apos,
+            inicio=args.inicio,
+            forcar_tipos_arriscados=args.forcar_tipos_arriscados,
+            cliente=client_factory(),
+        )
+    except svc_reordenacao.BlocoArriscadoError as exc:
+        raise CLIError(str(exc)) from exc
+
+    return {
+        "bloco_id_antigo": resultado.bloco_id_antigo,
+        "bloco_id_novo": resultado.bloco_id_novo,
+        "tipo": resultado.tipo,
+        "backup_path": resultado.backup_path,
+        "id_mudou": resultado.id_mudou,
+    }
+
+
 def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
     return {
         "repos_encontrados": resumo.repos_encontrados,
@@ -889,6 +925,12 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     ],
     "montar-estrutura-projeto": [
         "python -m cli --json montar-estrutura-projeto <pagina_id>",
+    ],
+    "reordenar-bloco": [
+        "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>",
+        "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --inicio",
+        "python -m cli --json reordenar-bloco <pagina_id> <child_page_id> --inicio "
+        "--forcar-tipos-arriscados  # PERIGOSO: gera um ID novo para a subpágina",
     ],
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
@@ -1196,6 +1238,26 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     montar_estrutura_projeto.add_argument("pagina_id")
 
+    reordenar_bloco = sub.add_parser(
+        "reordenar-bloco",
+        help="move um bloco existente para outra posição na mesma página. A API do "
+        "Notion não move blocos: isto apaga e recria — sempre grava um backup em "
+        "JSON antes. PERIGOSO para páginas/databases filhos: apagar e recriar gera "
+        "um ID NOVO e quebra links/backlinks salvos para o ID antigo; exige "
+        "--forcar-tipos-arriscados nesse caso",
+    )
+    reordenar_bloco.add_argument("pagina_id", help="página que contém o bloco como filho direto")
+    reordenar_bloco.add_argument("bloco_id")
+    reordenar_bloco.add_argument("--apos", help="ID do bloco irmão após o qual mover")
+    reordenar_bloco.add_argument(
+        "--inicio", action="store_true", help="move para o início da lista de filhos"
+    )
+    reordenar_bloco.add_argument(
+        "--forcar-tipos-arriscados",
+        action="store_true",
+        help="confirma mover um child_page/child_database mesmo sabendo que o ID muda",
+    )
+
     atualizar_github = sub.add_parser(
         "atualizar-github",
         help="re-sincroniza o database GITHUB (repos novos, propriedades, README mudado)",
@@ -1436,6 +1498,8 @@ def executar(
             dados = cmd_clonar_estrutura(args, client_factory=client_factory)
         elif comando == "montar-estrutura-projeto":
             dados = cmd_montar_estrutura_projeto(args, client_factory=client_factory)
+        elif comando == "reordenar-bloco":
+            dados = cmd_reordenar_bloco(args, client_factory=client_factory)
         elif comando == "atualizar-github":
             dados = cmd_atualizar_github(args, client_factory=client_factory)
         elif comando == "exportar-docx":

@@ -113,6 +113,16 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   2 databases). Testes de CLI ponta a ponta com `FakeEstruturaClient` em
   `tests/test_cli_notion_tasks.py`; 137 testes verdes, ruff limpo.
 
+- [2026-07-23] ✅ Novo subcomando `reordenar-bloco <pagina_id> <bloco_id>
+  (--apos <id> | --inicio) [--forcar-tipos-arriscados]`, borda fina sobre
+  `services/reordenacao.reordenar_bloco` do notion-starter. Recusa por padrão
+  mover `child_page`/`child_database` (o ID muda e quebra referências
+  externas) — a flag de força é obrigatória e o `--help` do comando avisa
+  explicitamente do risco. Sempre grava backup em JSON antes de apagar o
+  bloco original. Testes de CLI cobrindo o caminho seguro, a rejeição sem
+  forçar e a validação de exatamente um alvo (`--apos` xor `--inicio`) em
+  `tests/test_cli_notion_tasks.py`; 140 testes verdes, ruff limpo.
+
 ---
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases

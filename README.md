@@ -136,6 +136,8 @@ notion-tasks criar-subpagina <pagina_pai_id> "Estado atual"
 notion-tasks inspecionar-estrutura <pagina_id> --profundidade 3
 notion-tasks clonar-estrutura <pagina_referencia_id> <pagina_destino_id>
 notion-tasks montar-estrutura-projeto <pagina_id>
+notion-tasks reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>
+notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio
 
 # Relatórios diários
 notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports

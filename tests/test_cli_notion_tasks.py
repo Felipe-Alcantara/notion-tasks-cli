@@ -878,6 +878,58 @@ def test_montar_estrutura_projeto_cria_padrao_completo():
     assert len(saida["dados"]["databases_criados"]) == 2
 
 
+class FakeReordenacaoClient(FakeClient):
+    """Cliente que sustenta o fluxo de ``reordenar-bloco``."""
+
+    def __init__(self, blocos: list[dict]) -> None:
+        super().__init__()
+        self._blocos = blocos
+
+    def ler_blocos(self, block_id, page_size=100, buscar_todos=False, recursivo=False):
+        return self._blocos
+
+    def excluir_bloco(self, block_id):
+        self.chamadas.append(("excluir_bloco", block_id))
+        return {"id": block_id, "archived": True}
+
+    def anexar_blocos(self, block_id, blocos, *, apos_bloco_id=None):
+        self.chamadas.append(("anexar_blocos", (block_id, apos_bloco_id)))
+        return {"results": [{"id": "novo-id", **blocos[0]}]}
+
+
+def test_reordenar_bloco_move_paragrafo(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bloco = {"id": "p1", "type": "paragraph", "paragraph": {"rich_text": []}}
+    cliente = FakeReordenacaoClient([bloco])
+
+    codigo, saida = _executar(
+        ["--json", "reordenar-bloco", "pagina", "p1", "--apos", "p2"], client=cliente
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["bloco_id_novo"] == "novo-id"
+    assert ("excluir_bloco", "p1") in cliente.chamadas
+
+
+def test_reordenar_bloco_rejeita_child_page_sem_forcar(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bloco = {"id": "cp1", "type": "child_page", "child_page": {"title": "Estado atual"}}
+    cliente = FakeReordenacaoClient([bloco])
+
+    codigo, saida = _executar(
+        ["--json", "reordenar-bloco", "pagina", "cp1", "--inicio"], client=cliente
+    )
+
+    assert codigo != 0
+    assert not any(c[0] == "excluir_bloco" for c in cliente.chamadas)
+
+
+def test_reordenar_bloco_exige_exatamente_um_alvo():
+    cliente = FakeReordenacaoClient([{"id": "p1", "type": "paragraph", "paragraph": {}}])
+    codigo, saida = _executar(["--json", "reordenar-bloco", "pagina", "p1"], client=cliente)
+    assert codigo != 0
+
+
 # -- atualizar-github ------------------------------------------------------
 
 
