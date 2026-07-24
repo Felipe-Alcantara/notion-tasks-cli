@@ -924,6 +924,27 @@ def test_reordenar_bloco_rejeita_child_page_sem_forcar(tmp_path, monkeypatch):
     assert not any(c[0] == "excluir_bloco" for c in cliente.chamadas)
 
 
+def test_reordenar_bloco_rejeita_child_database_mesmo_com_forcar(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bloco = {"id": "db1", "type": "child_database", "child_database": {"title": "Docs"}}
+    cliente = FakeReordenacaoClient([bloco])
+
+    codigo, saida = _executar(
+        [
+            "--json",
+            "reordenar-bloco",
+            "pagina",
+            "db1",
+            "--inicio",
+            "--forcar-tipos-arriscados",
+        ],
+        client=cliente,
+    )
+
+    assert codigo != 0
+    assert not any(c[0] == "excluir_bloco" for c in cliente.chamadas)
+
+
 def test_reordenar_bloco_exige_exatamente_um_alvo():
     cliente = FakeReordenacaoClient([{"id": "p1", "type": "paragraph", "paragraph": {}}])
     codigo, saida = _executar(["--json", "reordenar-bloco", "pagina", "p1"], client=cliente)

@@ -669,17 +669,14 @@ def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
     if bool(apos) == bool(args.inicio):
         raise CLIError("Informe exatamente um entre --apos <bloco_id> e --inicio.")
 
-    try:
-        resultado = svc_reordenacao.reordenar_bloco(
-            pagina_id,
-            bloco_id,
-            apos_bloco_id=apos,
-            inicio=args.inicio,
-            forcar_tipos_arriscados=args.forcar_tipos_arriscados,
-            cliente=client_factory(),
-        )
-    except svc_reordenacao.BlocoArriscadoError as exc:
-        raise CLIError(str(exc)) from exc
+    resultado = svc_reordenacao.reordenar_bloco(
+        pagina_id,
+        bloco_id,
+        apos_bloco_id=apos,
+        inicio=args.inicio,
+        forcar_tipos_arriscados=args.forcar_tipos_arriscados,
+        cliente=client_factory(),
+    )
 
     return {
         "bloco_id_antigo": resultado.bloco_id_antigo,
@@ -1242,9 +1239,10 @@ def construir_parser() -> argparse.ArgumentParser:
         "reordenar-bloco",
         help="move um bloco existente para outra posição na mesma página. A API do "
         "Notion não move blocos: isto apaga e recria — sempre grava um backup em "
-        "JSON antes. PERIGOSO para páginas/databases filhos: apagar e recriar gera "
-        "um ID NOVO e quebra links/backlinks salvos para o ID antigo; exige "
-        "--forcar-tipos-arriscados nesse caso",
+        "JSON antes. child_database NUNCA é suportado (a API não recria um database "
+        "por este caminho; use criar-database + importar-planilha). child_page é "
+        "PERIGOSO: apagar e recriar gera um ID NOVO e quebra links/backlinks salvos "
+        "para o ID antigo; exige --forcar-tipos-arriscados",
     )
     reordenar_bloco.add_argument("pagina_id", help="página que contém o bloco como filho direto")
     reordenar_bloco.add_argument("bloco_id")
@@ -1255,7 +1253,8 @@ def construir_parser() -> argparse.ArgumentParser:
     reordenar_bloco.add_argument(
         "--forcar-tipos-arriscados",
         action="store_true",
-        help="confirma mover um child_page/child_database mesmo sabendo que o ID muda",
+        help="confirma mover um child_page mesmo sabendo que o ID muda "
+        "(child_database nunca é suportado, mesmo com esta flag)",
     )
 
     atualizar_github = sub.add_parser(

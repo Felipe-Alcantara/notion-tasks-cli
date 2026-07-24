@@ -123,6 +123,16 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   forçar e a validação de exatamente um alvo (`--apos` xor `--inicio`) em
   `tests/test_cli_notion_tasks.py`; 140 testes verdes, ruff limpo.
 
+- [2026-07-23] ✅ `reordenar-bloco` atualizado: `--help` e o guia de exemplos
+  deixam explícito que `child_database` nunca é suportado (mesmo com
+  `--forcar-tipos-arriscados`) — acompanha a correção em
+  `notion-starter/services/reordenacao.py` que virou `BlocoImpossivelError`.
+  Removido o `except BlocoArriscadoError` redundante em `cmd_reordenar_bloco`:
+  o catch genérico `(CLIError, ValueError, ...)` do dispatcher já cobre as
+  duas exceções (ambas herdam de `ValueError`). Novo teste cobrindo a
+  rejeição de `child_database` mesmo com a flag; 141 testes verdes, ruff
+  limpo.
+
 ---
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases
