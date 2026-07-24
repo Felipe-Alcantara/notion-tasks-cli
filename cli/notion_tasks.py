@@ -44,6 +44,7 @@ from services import inventario_github as svc_inventario  # noqa: E402
 from services import normalizacao as svc_normalizacao  # noqa: E402
 from services import propriedades as svc_propriedades  # noqa: E402
 from services import reordenacao as svc_reordenacao  # noqa: E402
+from services import schema as svc_schema  # noqa: E402
 from services import tarefas as svc  # noqa: E402
 
 carregar_env_file()
@@ -236,6 +237,9 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"Bloco {dados['bloco_id_antigo']} ({dados['tipo']}) reordenado -> "
             f"{dados['bloco_id_novo']}{aviso}\nBackup: {dados['backup_path']}"
         )
+    if comando == "garantir-coluna":
+        acao = "criada" if dados["criada"] else "já existia"
+        return f"Coluna '{dados['coluna']}' ({dados['tipo']}) {acao} em {dados['database_id']}."
     if comando == "database-atual":
         if not dados["database_id"]:
             return "Database atual: (não configurado)"
@@ -687,6 +691,17 @@ def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
     }
 
 
+def cmd_garantir_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    nome_coluna = _texto_obrigatorio(args.nome_coluna, "nome_coluna")
+    definicao = starter_properties.schema_propriedade(args.tipo)
+
+    criada = svc_schema.garantir_coluna(
+        database_id, nome_coluna, definicao, cliente=client_factory()
+    )
+    return {"database_id": database_id, "coluna": nome_coluna, "tipo": args.tipo, "criada": criada}
+
+
 def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
     return {
         "repos_encontrados": resumo.repos_encontrados,
@@ -928,6 +943,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --inicio",
         "python -m cli --json reordenar-bloco <pagina_id> <child_page_id> --inicio "
         "--forcar-tipos-arriscados  # PERIGOSO: gera um ID novo para a subpágina",
+    ],
+    "garantir-coluna": [
+        "python -m cli --json garantir-coluna <database_id> Idioma select",
+        "python -m cli --json garantir-coluna <database_id> Observações texto",
     ],
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
@@ -1257,6 +1276,21 @@ def construir_parser() -> argparse.ArgumentParser:
         "(child_database nunca é suportado, mesmo com esta flag)",
     )
 
+    garantir_coluna = sub.add_parser(
+        "garantir-coluna",
+        help="adiciona uma coluna a um database já existente, sem apagar nada — "
+        "criar-database só define schema na criação; este comando cobre a lacuna "
+        "de evoluir um database depois de criado. Idempotente: não mexe em nada "
+        "se a coluna já existe",
+    )
+    garantir_coluna.add_argument("database_id")
+    garantir_coluna.add_argument("nome_coluna")
+    garantir_coluna.add_argument(
+        "tipo",
+        help="tipos: titulo, texto, numero, data, select, multi_select, checkbox, "
+        "email, url, telefone, pessoas, arquivos",
+    )
+
     atualizar_github = sub.add_parser(
         "atualizar-github",
         help="re-sincroniza o database GITHUB (repos novos, propriedades, README mudado)",
@@ -1499,6 +1533,8 @@ def executar(
             dados = cmd_montar_estrutura_projeto(args, client_factory=client_factory)
         elif comando == "reordenar-bloco":
             dados = cmd_reordenar_bloco(args, client_factory=client_factory)
+        elif comando == "garantir-coluna":
+            dados = cmd_garantir_coluna(args, client_factory=client_factory)
         elif comando == "atualizar-github":
             dados = cmd_atualizar_github(args, client_factory=client_factory)
         elif comando == "exportar-docx":

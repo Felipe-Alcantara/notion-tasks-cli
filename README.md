@@ -138,6 +138,7 @@ notion-tasks clonar-estrutura <pagina_referencia_id> <pagina_destino_id>
 notion-tasks montar-estrutura-projeto <pagina_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio
+notion-tasks garantir-coluna <database_id> Idioma select
 
 # Relatórios diários
 notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports

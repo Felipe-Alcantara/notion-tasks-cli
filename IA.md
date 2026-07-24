@@ -133,6 +133,15 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
   rejeição de `child_database` mesmo com a flag; 141 testes verdes, ruff
   limpo.
 
+- [2026-07-24] ✅ Novo subcomando `garantir-coluna <database_id> <nome_coluna>
+  <tipo>`, borda fina sobre `services.schema.garantir_coluna` do
+  notion-starter. Reusa `starter_properties.schema_propriedade` para os
+  mesmos nomes de tipo em português já usados em `criar-database` (titulo,
+  texto, numero, select, …). Idempotente: reporta `criada: false` sem tocar
+  em nada se a coluna já existe. TDD: 5 testes de CLI escritos e confirmados
+  falhando (comando inexistente) antes da implementação; 146 testes verdes,
+  ruff limpo.
+
 ---
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases

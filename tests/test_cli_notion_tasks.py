@@ -1325,3 +1325,92 @@ def test_guia_inclui_comandos_novos():
         "mover-pagina",
         "mover-database",
     } <= comandos
+
+
+class FakeSchemaClient(FakeClient):
+    """Cliente que sustenta o fluxo de ``garantir-coluna``."""
+
+    def __init__(self, propriedades: dict, *, com_data_source: bool = True) -> None:
+        super().__init__()
+        self._propriedades = dict(propriedades)
+        self._com_data_source = com_data_source
+
+    def listar_data_sources(self, database_id):
+        self.chamadas.append(("listar_data_sources", database_id))
+        return [{"id": "ds1"}] if self._com_data_source else []
+
+    def get_data_source(self, data_source_id):
+        return {"properties": self._propriedades}
+
+    def atualizar_data_source(self, data_source_id, *, propriedades):
+        self.chamadas.append(("atualizar_data_source", (data_source_id, propriedades)))
+        self._propriedades.update(propriedades)
+
+    def get_database(self, database_id):
+        return {"properties": self._propriedades}
+
+    def atualizar_database(self, database_id, *, propriedades):
+        self.chamadas.append(("atualizar_database", (database_id, propriedades)))
+        self._propriedades.update(propriedades)
+
+
+def test_guia_inclui_garantir_coluna():
+    codigo, saida = _executar(["--json", "guia"])
+    comandos = {c["comando"] for c in saida["dados"]["comandos"]}
+    assert "garantir-coluna" in comandos
+
+
+def test_garantir_coluna_adiciona_select():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Idioma", "select"], client=cliente
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["criada"] is True
+    assert ("atualizar_data_source", ("ds1", {"Idioma": {"select": {}}})) in cliente.chamadas
+
+
+def test_garantir_coluna_texto_e_numero():
+    cliente_texto = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Resumo", "texto"], client=cliente_texto
+    )
+    assert codigo == 0
+    assert (
+        "atualizar_data_source",
+        ("ds1", {"Resumo": {"rich_text": {}}}),
+    ) in cliente_texto.chamadas
+
+    cliente_numero = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Peso", "numero"], client=cliente_numero
+    )
+    assert codigo == 0
+    assert (
+        "atualizar_data_source",
+        ("ds1", {"Peso": {"number": {}}}),
+    ) in cliente_numero.chamadas
+
+
+def test_garantir_coluna_nao_mexe_quando_ja_existe():
+    cliente = FakeSchemaClient(
+        {"Nome": {"type": "title", "title": {}}, "Idioma": {"type": "select", "select": {}}}
+    )
+
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Idioma", "select"], client=cliente
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["criada"] is False
+    assert not any(c[0] == "atualizar_data_source" for c in cliente.chamadas)
+
+
+def test_garantir_coluna_tipo_invalido():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Idioma", "tipo-que-nao-existe"], client=cliente
+    )
+    assert codigo != 0
