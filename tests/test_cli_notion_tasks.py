@@ -1175,6 +1175,10 @@ class FakeNovosClient:
         self.chamadas.append(("mover_database", (database_id, novo_pai_id)))
         return {"id": database_id}
 
+    def renomear_database(self, database_id, novo_titulo):
+        self.chamadas.append(("renomear_database", (database_id, novo_titulo)))
+        return {"id": database_id}
+
     def enviar_arquivo(self, conteudo, nome, content_type):
         self.chamadas.append(("enviar_arquivo", (nome, content_type)))
         return "upload-1"
@@ -1315,6 +1319,23 @@ def test_mover_database_reparenteia():
     assert ("mover_database", ("db1", "pai2")) in fake.chamadas
 
 
+def test_renomear_database_troca_titulo():
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "renomear-database", "db1", "banco de ideias"], client=fake
+    )
+    assert codigo == 0
+    assert ("renomear_database", ("db1", "banco de ideias")) in fake.chamadas
+    assert saida["dados"]["titulo"] == "banco de ideias"
+
+
+def test_renomear_database_titulo_vazio_falha():
+    fake = FakeNovosClient()
+    codigo, _ = _executar(["--json", "renomear-database", "db1", "   "], client=fake)
+    assert codigo != 0
+    assert not any(c[0] == "renomear_database" for c in fake.chamadas)
+
+
 def test_guia_inclui_comandos_novos():
     codigo, saida = _executar(["--json", "guia"])
     comandos = {c["comando"] for c in saida["dados"]["comandos"]}
@@ -1324,6 +1345,7 @@ def test_guia_inclui_comandos_novos():
         "anexar-arquivo",
         "mover-pagina",
         "mover-database",
+        "renomear-database",
     } <= comandos
 
 

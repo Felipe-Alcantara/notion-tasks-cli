@@ -237,6 +237,8 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"Bloco {dados['bloco_id_antigo']} ({dados['tipo']}) reordenado -> "
             f"{dados['bloco_id_novo']}{aviso}\nBackup: {dados['backup_path']}"
         )
+    if comando == "renomear-database":
+        return f"Database {dados['id']} renomeado para '{dados['titulo']}'."
     if comando == "garantir-coluna":
         acao = "criada" if dados["criada"] else "já existia"
         return f"Coluna '{dados['coluna']}' ({dados['tipo']}) {acao} em {dados['database_id']}."
@@ -846,6 +848,13 @@ def cmd_mover_database(args: argparse.Namespace, *, client_factory: ClientFactor
     return {"id": database_id, "novo_pai": destino}
 
 
+def cmd_renomear_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    novo_titulo = _texto_obrigatorio(args.novo_titulo, "novo_titulo")
+    client_factory().renomear_database(database_id, novo_titulo)
+    return {"id": database_id, "titulo": novo_titulo}
+
+
 def cmd_perfis(args: argparse.Namespace) -> Any:
     acao = args.acao_perfil
     if acao == "listar":
@@ -983,6 +992,9 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "mover-pagina": [
         "python -m cli --json mover-pagina <page_id> <nova_pagina_pai_id>",
         "python -m cli --json mover-pagina <page_id> <database_id> --tipo-pai database_id",
+    ],
+    "renomear-database": [
+        'python -m cli --json renomear-database <database_id> "Novo título"',
     ],
     "mover-database": [
         "python -m cli --json mover-database <database_id> <nova_pagina_pai_id>",
@@ -1434,6 +1446,14 @@ def construir_parser() -> argparse.ArgumentParser:
     mover_database.add_argument("database_id")
     mover_database.add_argument("novo_pai_id")
 
+    renomear_database = sub.add_parser(
+        "renomear-database",
+        help="troca o título de um database, sem tocar no schema nem nas linhas — "
+        "resolve os databases 'Untitled' que sobram de templates duplicados",
+    )
+    renomear_database.add_argument("database_id")
+    renomear_database.add_argument("novo_titulo")
+
     perfis = sub.add_parser(
         "perfis",
         help="gerencia perfis locais de workspaces/keys do Notion",
@@ -1559,6 +1579,8 @@ def executar(
             dados = cmd_mover_pagina(args, client_factory=client_factory)
         elif comando == "mover-database":
             dados = cmd_mover_database(args, client_factory=client_factory)
+        elif comando == "renomear-database":
+            dados = cmd_renomear_database(args, client_factory=client_factory)
         else:
             raise CLIError(f"Comando desconhecido: {comando}")
         return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)
