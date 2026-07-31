@@ -694,7 +694,9 @@ def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
 def cmd_garantir_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     database_id = _texto_obrigatorio(args.database_id, "database_id")
     nome_coluna = _texto_obrigatorio(args.nome_coluna, "nome_coluna")
-    definicao = starter_properties.schema_propriedade(args.tipo)
+    definicao = starter_properties.schema_propriedade(
+        args.tipo, relacionar_com=getattr(args, "relacionar_com", None)
+    )
 
     criada = svc_schema.garantir_coluna(
         database_id, nome_coluna, definicao, cliente=client_factory()
@@ -947,6 +949,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "garantir-coluna": [
         "python -m cli --json garantir-coluna <database_id> Idioma select",
         "python -m cli --json garantir-coluna <database_id> Observações texto",
+        "python -m cli --json garantir-coluna <database_id> Projeto relacao "
+        "--relacionar-com <database_alvo_id>",
     ],
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
@@ -1288,7 +1292,13 @@ def construir_parser() -> argparse.ArgumentParser:
     garantir_coluna.add_argument(
         "tipo",
         help="tipos: titulo, texto, numero, data, select, multi_select, checkbox, "
-        "email, url, telefone, pessoas, arquivos",
+        "email, url, telefone, pessoas, arquivos, relacao",
+    )
+    garantir_coluna.add_argument(
+        "--relacionar-com",
+        dest="relacionar_com",
+        help="ID do database alvo — obrigatório (e exclusivo) para o tipo 'relacao'. "
+        "A relação é bidirecional: o Notion cria a coluna espelho no database alvo",
     )
 
     atualizar_github = sub.add_parser(

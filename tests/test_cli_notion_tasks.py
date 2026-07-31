@@ -1408,6 +1408,76 @@ def test_garantir_coluna_nao_mexe_quando_ja_existe():
     assert not any(c[0] == "atualizar_data_source" for c in cliente.chamadas)
 
 
+def test_garantir_coluna_relacao_usa_data_source_do_alvo():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+
+    codigo, saida = _executar(
+        ["--json", "garantir-coluna", "db1", "Projeto", "relacao", "--relacionar-com", "db-alvo"],
+        client=cliente,
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["criada"] is True
+    assert (
+        "atualizar_data_source",
+        (
+            "ds1",
+            {
+                "Projeto": {
+                    "relation": {
+                        "type": "dual_property",
+                        "dual_property": {},
+                        "data_source_id": "ds1",
+                    }
+                }
+            },
+        ),
+    ) in cliente.chamadas
+
+
+def test_garantir_coluna_relacao_sem_data_source_usa_database_id():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}}, com_data_source=False)
+
+    codigo, _ = _executar(
+        ["--json", "garantir-coluna", "db1", "Projeto", "relacao", "--relacionar-com", "db-alvo"],
+        client=cliente,
+    )
+
+    assert codigo == 0
+    assert (
+        "atualizar_database",
+        (
+            "db1",
+            {
+                "Projeto": {
+                    "relation": {
+                        "database_id": "db-alvo",
+                        "type": "dual_property",
+                        "dual_property": {},
+                    }
+                }
+            },
+        ),
+    ) in cliente.chamadas
+
+
+def test_garantir_coluna_relacao_sem_alvo_falha():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+    codigo, _ = _executar(
+        ["--json", "garantir-coluna", "db1", "Projeto", "relacao"], client=cliente
+    )
+    assert codigo != 0
+
+
+def test_garantir_coluna_alvo_em_tipo_nao_relacional_falha():
+    cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
+    codigo, _ = _executar(
+        ["--json", "garantir-coluna", "db1", "Idioma", "select", "--relacionar-com", "db-alvo"],
+        client=cliente,
+    )
+    assert codigo != 0
+
+
 def test_garantir_coluna_tipo_invalido():
     cliente = FakeSchemaClient({"Nome": {"type": "title", "title": {}}})
     codigo, saida = _executar(
