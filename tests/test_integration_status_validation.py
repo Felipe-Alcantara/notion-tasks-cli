@@ -22,6 +22,8 @@ class TestIntegrationStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         # Mock da tasklist real
         mock_tasklist = Mock()
@@ -76,6 +78,8 @@ class TestIntegrationStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -139,6 +143,8 @@ class TestIntegrationStatusValidation:
             mock_args.prazo = None
             mock_args.duracao = None
             mock_args.area = None
+            mock_args.set = None
+            mock_args.conteudo = None
 
             mock_tasklist = Mock()
             mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -210,6 +216,8 @@ class TestEdgeCases:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -233,6 +241,8 @@ class TestEdgeCases:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -258,6 +268,8 @@ class TestEdgeCases:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)

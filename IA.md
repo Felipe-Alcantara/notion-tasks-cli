@@ -146,3 +146,57 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
 
 Ideias abertas à contribuição: mais subcomandos de escrita em databases
 multi-fonte, saída paginada para workspaces grandes, empacotamento no PyPI.
+
+---
+
+## [2026-08-17] Comandos que impedem o erro em vez de documentá-lo
+
+**Contexto.** Uma sessão longa operando o Notion de verdade (17 tarefas criadas,
+16 reescritas, 48 ligações) mostrou que a CLI documentava as regras certas e não
+as **fazia valer**. Quatro mudanças, todas nascidas de fricção medida:
+
+### `schema <database_id>` — a pergunta que antecede toda escrita
+
+Descobrir nome exato de coluna, valores aceitos por select/status, o que o Notion
+calcula e como cada relação está configurada exigia chamar a API crua. Agora é um
+comando. `--editaveis` esconde o que não aceita PATCH. Implementação em
+`notion_starter.schema.descrever_database`.
+
+### `relacionar <a> <b> --coluna "Nome"`
+
+Ligar duas linhas com `editar-linha` na mão exige saber se o Notion espelha a
+outra ponta — e **o tipo declarado não permite saber** (ver `IA.md` do
+`notion-starter`, mesma data, com o experimento). O comando confere e grava só o
+que faltar; idempotente, com `--desfazer`. Mensagens de erro listam as colunas de
+relação disponíveis quando o nome não existe, e mandam para `editar-linha` quando
+a coluna não é relação.
+
+### `escrever` recusa página que contém database
+
+Era o erro relatado com modelos mais fracos: link de uma página que **contém** a
+database, texto escrito solto abaixo da tabela. Agora falha com a lista das
+databases (título + ID) e os comandos prontos; `--mesmo-com-database` libera.
+`conteudo` também passou a devolver `databases_dentro` + `aviso`, para o problema
+aparecer já na **leitura**. A exceção é tratada na borda como erro de uso (código
+2, mensagem inteira, sem traceback) — traceback só atrapalha quem lê.
+
+### `criar --set` e `--conteudo`
+
+O ciclo `criar` → `editar-linha` → `escrever` eram três chamadas, e um script que
+estourasse no meio deixava linha órfã sem o operador saber o ID. Agora `criar`
+aceita qualquer coluna e o corpo em Markdown. Se algo falhar **depois** da linha
+existir, o erro traz o ID e a instrução explícita de completar em vez de recriar.
+
+### `--apagar-tudo` em `escrever`/`limpar`
+
+`--substituir` agora preserva blocos não recriáveis por padrão e **relata** o que
+manteve. `--apagar-tudo` volta ao comportamento antigo, sob pedido explícito.
+
+**Efeito colateral nos testes**: `test_cli_status_validation` e
+`test_integration_status_validation` usavam `Mock()` para os args, e `Mock`
+auto-cria atributos — `args.set` virava verdadeiro e o `criar` tentava completar
+a linha com um Mock. Os fakes passaram a declarar `set`/`conteudo` como `None`.
+
+**Validação real** (2026-08-17): todos os caminhos rodados contra o workspace do
+usuário, com quatro linhas de teste criadas e arquivadas ao fim. 166 testes
+verdes, `ruff` limpo.

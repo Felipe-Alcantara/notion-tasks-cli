@@ -24,6 +24,8 @@ class TestStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -59,6 +61,8 @@ class TestStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -86,6 +90,8 @@ class TestStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -122,6 +128,8 @@ class TestStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -255,6 +263,8 @@ class TestStatusValidation:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)
@@ -318,6 +328,8 @@ class TestMensagensErroMelhoradas:
         mock_args.prazo = None
         mock_args.duracao = None
         mock_args.area = None
+        mock_args.set = None
+        mock_args.conteudo = None
 
         mock_tasklist = Mock()
         mock_tasklist_factory = Mock(return_value=mock_tasklist)

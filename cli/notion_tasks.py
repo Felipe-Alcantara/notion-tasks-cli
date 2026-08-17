@@ -22,6 +22,7 @@ if LOCAL_STARTER.exists() and str(LOCAL_STARTER) not in sys.path:
     sys.path.insert(0, str(LOCAL_STARTER))
 
 from notion_starter import (  # noqa: E402
+    EscritaAbaixoDeDatabaseError,
     NotionAPIError,
     NotionClient,
     NotionConfigurationError,
@@ -30,8 +31,10 @@ from notion_starter import (  # noqa: E402
     construir_inventario,
 )
 from notion_starter import properties as starter_properties  # noqa: E402
+from notion_starter import schema as starter_schema  # noqa: E402
 from notion_starter.services import anexos as svc_anexos  # noqa: E402
 from notion_starter.services import ingestao as svc_ingestao  # noqa: E402
+from notion_starter.services import relacoes as svc_relacoes  # noqa: E402
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
 
 from core import workspaces as perfis_workspace  # noqa: E402
@@ -325,7 +328,12 @@ def cmd_ler(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> A
     raise CLIError("Tarefa não encontrada.")
 
 
-def cmd_criar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> Any:
+def cmd_criar(
+    args: argparse.Namespace,
+    *,
+    tasklist_factory: TaskListFactory,
+    client_factory: ClientFactory = _criar_client,
+) -> Any:
     """Cria uma tarefa nova.
 
     IMPORTANTE: Valida status contra opções disponíveis no database para evitar
@@ -352,7 +360,37 @@ def cmd_criar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) ->
         areas=_lista_csv(args.area),
         tasklist=tasklist_factory(),
     )
-    return _tarefa_dict(tarefa)
+    dados = _tarefa_dict(tarefa)
+
+    # A partir daqui a linha JÁ EXISTE. Qualquer falha abaixo é reportada com o
+    # id junto, para quem chamou poder completar a linha em vez de criar outra —
+    # um script que estoura aqui sem saber o id deixa órfã no database.
+    page_id = dados.get("id", "")
+    extras = _pares_chave_valor(getattr(args, "set", None), "--set")
+    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    if not extras and not conteudo:
+        return dados
+
+    try:
+        if extras:
+            dados["propriedades"] = svc_propriedades.editar_linha(
+                page_id, extras, cliente=client_factory()
+            )["atualizadas"]
+        if conteudo:
+            escrita = svc_conteudo.escrever_conteudo(
+                page_id,
+                conteudo,
+                # A linha acabou de nascer vazia: não há database dentro dela.
+                mesmo_com_database=True,
+                cliente=client_factory(),
+            )
+            dados["blocos_anexados"] = escrita.anexados
+    except Exception as erro:  # noqa: BLE001 - o id precisa sobreviver ao erro
+        raise CLIError(
+            f"Tarefa criada (id {page_id}), mas falhou ao completá-la: {erro}. "
+            f"Use 'editar-linha {page_id}' / 'escrever {page_id}' — não crie de novo."
+        ) from erro
+    return dados
 
 
 def cmd_editar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> Any:
@@ -516,12 +554,33 @@ def cmd_mapear(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
 
 def cmd_conteudo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _texto_obrigatorio(args.page_id, "page_id")
-    resultado = svc_conteudo.ler_pagina_ou_database(page_id, cliente=client_factory())
+    cliente = client_factory()
+    resultado = svc_conteudo.ler_pagina_ou_database(page_id, cliente=cliente)
     if resultado["tipo"] == "database":
         # Borda acrescenta o aviso voltado ao usuário da CLI.
         resultado["aviso"] = (
             "Isto é um database: o conteúdo são as linhas, não blocos. "
             "Use 'linhas' para listá-las (já incluídas em 'linhas' abaixo)."
+        )
+        return resultado
+
+    # Página comum: pode ainda assim ser a CASA de uma database. Quem lê precisa
+    # descobrir isso agora, na leitura, e não depois de escrever no lugar errado.
+    dentro = svc_conteudo.databases_da_pagina(page_id, cliente=cliente)
+    if dentro:
+        resultado["databases_dentro"] = [
+            {"id": database_id, "titulo": titulo or "(sem título)"}
+            for database_id, titulo in dentro
+        ]
+        listagem = "; ".join(
+            f"{titulo or '(sem título)'} ({database_id})" for database_id, titulo in dentro
+        )
+        resultado["aviso"] = (
+            f"ATENÇÃO: esta página CONTÉM database(s) — {listagem}. "
+            "O conteúdo de verdade são as LINHAS delas, não o corpo desta página. "
+            "Use 'linhas <database_id>' para listar e trabalhe na linha certa. "
+            "'escrever' aqui é recusado por padrão, porque criaria um bloco solto "
+            "abaixo da tabela."
         )
     return resultado
 
@@ -567,10 +626,36 @@ def cmd_blocos(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _texto_obrigatorio(args.page_id, "page_id")
     conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
-    total = svc_conteudo.escrever_conteudo(
-        page_id, conteudo, substituir=args.substituir, cliente=client_factory()
+    apagar_tudo = getattr(args, "apagar_tudo", False)
+    if apagar_tudo and not args.substituir:
+        raise CLIError("--apagar-tudo só faz sentido junto de --substituir.")
+    resultado = svc_conteudo.escrever_conteudo(
+        page_id,
+        conteudo,
+        substituir=args.substituir,
+        apagar_nao_recriaveis=apagar_tudo,
+        mesmo_com_database=getattr(args, "mesmo_com_database", False),
+        cliente=client_factory(),
     )
-    return {"id": page_id, "blocos_anexados": total, "substituiu": args.substituir}
+    saida: dict[str, Any] = {
+        "id": page_id,
+        "blocos_anexados": resultado.anexados,
+        "substituiu": args.substituir,
+    }
+    if resultado.limpeza is not None:
+        saida["blocos_apagados"] = resultado.limpeza.apagados
+        # Dizer o que foi mantido é o ponto: quem substituiu precisa saber que a
+        # imagem/subpágina continua na página e o texto novo entrou depois dela.
+        saida["blocos_preservados"] = [
+            {"id": bloco_id, "tipo": tipo} for bloco_id, tipo in resultado.preservados
+        ]
+        if resultado.preservados:
+            saida["aviso"] = (
+                "Preservados blocos que não se recriam a partir de Markdown "
+                f"({', '.join(resultado.limpeza.tipos_preservados)}); o conteúdo novo "
+                "entrou depois deles. Use --apagar-tudo para apagá-los também."
+            )
+    return saida
 
 
 def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -581,8 +666,25 @@ def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
             "Limpar apaga TODO o corpo da página (destrutivo). "
             "Repita com --sim para confirmar."
         )
-    total = svc_conteudo.limpar_conteudo(page_id, cliente=client_factory())
-    return {"id": page_id, "blocos_apagados": total}
+    resultado = svc_conteudo.limpar_conteudo(
+        page_id,
+        incluir_nao_recriaveis=getattr(args, "apagar_tudo", False),
+        cliente=client_factory(),
+    )
+    saida: dict[str, Any] = {
+        "id": page_id,
+        "blocos_apagados": resultado.apagados,
+        "blocos_preservados": [
+            {"id": bloco_id, "tipo": tipo} for bloco_id, tipo in resultado.preservados
+        ],
+    }
+    if resultado.preservados:
+        saida["aviso"] = (
+            "Preservados blocos que não se recriam a partir de Markdown "
+            f"({', '.join(resultado.tipos_preservados)}). "
+            "Use --apagar-tudo para apagá-los também."
+        )
+    return saida
 
 
 def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -601,6 +703,58 @@ def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
         )
     svc_conteudo.excluir_bloco(block_id, cliente=client_factory())
     return {"id": block_id, "apagado": True}
+
+
+def _sem_hifens(identificador: str) -> str:
+    """Compara IDs do Notion ignorando hífens — a API aceita as duas formas."""
+
+    return str(identificador).replace("-", "").lower()
+
+
+def cmd_schema(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Descreve o schema real de um database: colunas, tipos, opções e relações.
+
+    É o comando que responde à pergunta que antecede **toda** escrita num
+    database que você não conhece — qual o nome exato da coluna, quais valores
+    o select aceita, o que é calculado pelo Notion e não aceita PATCH, e quais
+    relações são de mão única (precisam ser gravadas nos dois lados).
+
+    Sem ele o caminho era chamar a API do Notion na mão, que é justamente o
+    passo que se pula com pressa — e o erro aparece depois, já gravado.
+    """
+
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    descricao = starter_schema.descrever_database(
+        client_factory().get_database(database_id)
+    )
+    dados = descricao.para_dict()
+    if args.editaveis:
+        editaveis = {coluna.nome for coluna in descricao.editaveis}
+        dados["colunas"] = [c for c in dados["colunas"] if c["nome"] in editaveis]
+    return dados
+
+
+def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Liga duas linhas numa coluna de relação, **nos dois sentidos**.
+
+    Uma relação ``single_property`` do Notion parece bidirecional na interface
+    (ligar pela tela mostra as duas páginas se enxergando), mas pela API só o
+    lado escrito é gravado. Este comando resolve isso: descobre a configuração
+    da coluna e, quando ela é de mão única, escreve as duas pontas.
+    """
+
+    origem = _texto_obrigatorio(args.page_a, "page_a")
+    destino = _texto_obrigatorio(args.page_b, "page_b")
+    coluna = _texto_obrigatorio(args.coluna, "coluna")
+    if _sem_hifens(origem) == _sem_hifens(destino):
+        raise CLIError("page_a e page_b são a mesma página — nada a relacionar.")
+    return svc_relacoes.relacionar(
+        origem,
+        destino,
+        coluna,
+        desfazer=args.desfazer,
+        cliente=client_factory(),
+    )
 
 
 def cmd_buscar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -903,7 +1057,11 @@ def cmd_perfis(args: argparse.Namespace) -> Any:
 EXEMPLOS_GUIA: dict[str, list[str]] = {
     "listar": ['python -m cli --json listar --status "Entrada"'],
     "ler": ["python -m cli --json ler <task_id>"],
-    "criar": ['python -m cli --json criar "Nova tarefa" --status "Entrada" --duracao "Dias"'],
+    "criar": [
+        'python -m cli --json criar "Nova tarefa" --status "Entrada" --duracao "Dias"',
+        'python -m cli --json criar "Nova tarefa" --status "Entrada" '
+        '--set "Prioridade=Alta" --conteudo $\'## Contexto\\n\\nDetalhes...\'',
+    ],
     "editar": ['python -m cli --json editar <task_id> --status "Concluída"'],
     "mover": ['python -m cli --json mover <task_id> "Concluída"'],
     "concluir": ['python -m cli --json concluir <task_id> "Concluída"'],
@@ -927,10 +1085,24 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "escrever": [
         "python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'",
         "python -m cli --json escrever <page_id> $'# Só isto' --substituir",
+        "python -m cli --json escrever <page_id> $'# Zera mesmo' --substituir --apagar-tudo",
+        "# página que contém database: trabalhe nas LINHAS, não escreva solto nela",
+        "python -m cli --json linhas <database_id>",
     ],
     "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
     "apagar-bloco": ["python -m cli --json apagar-bloco <block_id> --sim"],
-    "limpar": ["python -m cli --json limpar <page_id> --sim"],
+    "limpar": [
+        "python -m cli --json limpar <page_id> --sim",
+        "python -m cli --json limpar <page_id> --sim --apagar-tudo",
+    ],
+    "schema": [
+        "python -m cli --json schema <database_id>",
+        "python -m cli --json schema <database_id> --editaveis",
+    ],
+    "relacionar": [
+        'python -m cli --json relacionar <page_a> <page_b> --coluna "Subtarefas relacionadas"',
+        'python -m cli --json relacionar <page_a> <page_b> --coluna "Depende de" --desfazer',
+    ],
     "clonar-database": [
         "python -m cli --json clonar-database <database_id>",
         'python -m cli --json clonar-database <database_id> --titulo "Cópia" --com-linhas',
@@ -1093,6 +1265,19 @@ def construir_parser() -> argparse.ArgumentParser:
     criar.add_argument("--prazo")
     criar.add_argument("--duracao")
     criar.add_argument("--area", action="append", help="ID de área; aceita CSV e repetição")
+    criar.add_argument(
+        "--set",
+        action="append",
+        metavar="NOME=VALOR",
+        help="preenche QUALQUER outra coluna já na criação (mesma sintaxe de "
+        'editar-linha). Ex.: --set "Prioridade=Alta" --set "Projeto=<id1>,<id2>". '
+        "Evita o vaivém criar → editar-linha",
+    )
+    criar.add_argument(
+        "--conteudo",
+        help="Markdown do corpo da tarefa, escrito logo após as propriedades — "
+        "fecha criar + editar-linha + escrever numa chamada só",
+    )
 
     editar = sub.add_parser("editar", help="edita uma tarefa")
     editar.add_argument("task_id")
@@ -1184,7 +1369,26 @@ def construir_parser() -> argparse.ArgumentParser:
         "--substituir",
         action="store_true",
         help="apaga o corpo atual antes de escrever — a página fica só com este "
-        "conteúdo (evita ir empilhando blocos ao corrigir/reescrever)",
+        "conteúdo (evita ir empilhando blocos ao corrigir/reescrever). Blocos que "
+        "não se recriam a partir de Markdown (imagem, arquivo, embed, subpágina, "
+        "child_database) são PRESERVADOS e o texto novo entra depois deles",
+    )
+    escrever.add_argument(
+        "--mesmo-com-database",
+        dest="mesmo_com_database",
+        action="store_true",
+        help="permite escrever numa página que CONTÉM uma database. Por padrão "
+        "isso é recusado: o texto viraria um bloco solto abaixo da tabela, onde "
+        "não vira linha nem aparece em view nenhuma. Se o alvo é uma database, o "
+        "trabalho é nas LINHAS ('linhas' → 'editar-linha'/'escrever <linha_id>')",
+    )
+    escrever.add_argument(
+        "--apagar-tudo",
+        dest="apagar_tudo",
+        action="store_true",
+        help="com --substituir, apaga TAMBÉM os blocos não recriáveis (imagem, "
+        "arquivo, embed, subpágina, child_database). Perigoso: a URL de arquivo "
+        "do Notion expira e apagar um child_database leva o database inteiro",
     )
 
     editar_bloco = sub.add_parser(
@@ -1208,6 +1412,40 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     limpar.add_argument("page_id")
     limpar.add_argument("--sim", action="store_true", help="confirma a limpeza")
+    limpar.add_argument(
+        "--apagar-tudo",
+        dest="apagar_tudo",
+        action="store_true",
+        help="apaga TAMBÉM imagem, arquivo, embed, subpágina e child_database — "
+        "que por padrão são preservados por não se recriarem a partir de Markdown",
+    )
+
+    esquema = sub.add_parser(
+        "schema",
+        help="descreve as colunas de um database: tipo, opções válidas, o que é "
+        "calculado pelo Notion e como cada relação está configurada. LEIA ISTO "
+        "antes de escrever num database que você não conhece",
+    )
+    esquema.add_argument("database_id")
+    esquema.add_argument(
+        "--editaveis",
+        action="store_true",
+        help="mostra só as colunas que aceitam escrita",
+    )
+
+    relacionar = sub.add_parser(
+        "relacionar",
+        help="liga duas linhas por uma coluna de relação NOS DOIS SENTIDOS — "
+        "relação single_property do Notion não espelha sozinha pela API",
+    )
+    relacionar.add_argument("page_a")
+    relacionar.add_argument("page_b")
+    relacionar.add_argument(
+        "--coluna", required=True, help='nome da coluna de relação (ex.: "Subtarefas relacionadas")'
+    )
+    relacionar.add_argument(
+        "--desfazer", action="store_true", help="remove a ligação em vez de criá-la"
+    )
 
     buscar = sub.add_parser("buscar", help="pesquisa páginas e databases visíveis")
     buscar.add_argument("query", nargs="?", help="texto do título; vazio lista tudo")
@@ -1514,7 +1752,9 @@ def executar(
         elif comando == "ler":
             dados = cmd_ler(args, tasklist_factory=tasklist_factory)
         elif comando == "criar":
-            dados = cmd_criar(args, tasklist_factory=tasklist_factory)
+            dados = cmd_criar(
+                args, tasklist_factory=tasklist_factory, client_factory=client_factory
+            )
         elif comando == "editar":
             dados = cmd_editar(args, tasklist_factory=tasklist_factory)
         elif comando == "mover":
@@ -1549,6 +1789,10 @@ def executar(
             dados = cmd_apagar_bloco(args, client_factory=client_factory)
         elif comando == "limpar":
             dados = cmd_limpar(args, client_factory=client_factory)
+        elif comando == "schema":
+            dados = cmd_schema(args, client_factory=client_factory)
+        elif comando == "relacionar":
+            dados = cmd_relacionar(args, client_factory=client_factory)
         elif comando == "buscar":
             dados = cmd_buscar(args, client_factory=client_factory)
         elif comando == "clonar-database":
@@ -1584,6 +1828,16 @@ def executar(
         else:
             raise CLIError(f"Comando desconhecido: {comando}")
         return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)
+    except EscritaAbaixoDeDatabaseError as exc:
+        # Erro de uso, não falha técnica: a mensagem ensina o caminho certo e
+        # precisa chegar inteira. Traceback aqui só atrapalha quem lê — pessoa
+        # ou modelo.
+        dados = _envelope(False, erro=str(exc))
+        dados["databases_dentro"] = [
+            {"id": database_id, "titulo": titulo or "(sem título)"}
+            for database_id, titulo in exc.databases
+        ]
+        return 2, dados if args.json else f"Erro: {exc}"
     except (CLIError, ValueError, perfis_workspace.WorkspaceConfigError) as exc:
         return 2, _envelope(False, erro=str(exc)) if args.json else f"Erro: {exc}"
     except (NotionHTTPError, NotionAPIError) as exc:
