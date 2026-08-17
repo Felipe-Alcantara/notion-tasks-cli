@@ -784,9 +784,17 @@ def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFac
     ]
     # Varredura: listar repositório à mão só acha o que já se lembra, e o dia de
     # trabalho esquecido, por definição, não está nessa lista.
+    #
+    # A deduplicação é pelo CAMINHO RESOLVIDO, nunca pelo nome: o objetivo de
+    # `--repo` é justamente dar um nome de produto diferente do nome da pasta,
+    # então comparar nomes deixa o mesmo repositório entrar duas vezes e o dia
+    # sai com a mesma lista de commits repetida sob dois títulos.
+    ja_incluidos = {Path(r.caminho).resolve() for r in repositorios}
     for raiz in args.descobrir or []:
         for encontrado in svc_historico.descobrir_repositorios(raiz):
-            if all(r.nome != encontrado.nome for r in repositorios):
+            caminho = Path(encontrado.caminho).resolve()
+            if caminho not in ja_incluidos:
+                ja_incluidos.add(caminho)
                 repositorios.append(encontrado)
     if not repositorios:
         raise CLIError(

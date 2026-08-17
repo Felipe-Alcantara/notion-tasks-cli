@@ -302,3 +302,56 @@ def test_saida_json_continua_serializavel():
     )
 
     assert json.loads(json.dumps(saida))
+
+
+# ------------------------------------------------- relatorios-do-git (dedup)
+
+
+def test_descoberta_nao_duplica_repositorio_ja_nomeado(tmp_path, monkeypatch):
+    """`--repo` existe para dar nome de produto; dedup por nome deixa passar.
+
+    O mesmo repositório entrava duas vezes — uma com o nome de produto e outra
+    com o nome da pasta — e o relatório do dia saía com a mesma lista de
+    commits repetida sob dois títulos.
+    """
+
+    repo = tmp_path / "Felixoverse-Official-Bot"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+
+    capturados: list[str] = []
+
+    def _consolidar(repositorios, **_):
+        capturados.extend(r.nome for r in repositorios)
+        return []
+
+    monkeypatch.setattr(cli.svc_historico, "consolidar_dias", _consolidar)
+
+    codigo, _ = cli.executar(
+        [
+            "--json",
+            "relatorios-do-git",
+            "--database",
+            "db",
+            "--descobrir",
+            str(tmp_path),
+            "--repo",
+            f"Felixoverse Official Bot={repo}",
+            "--dry-run",
+        ],
+        client_factory=lambda: ClienteFalso(),
+    )
+
+    assert codigo == 0
+    assert capturados == ["Felixoverse Official Bot"]
+
+
+def test_sem_repositorio_nenhum_o_erro_ensina_as_duas_saidas():
+    codigo, saida = _executar(
+        ["--json", "relatorios-do-git", "--database", "db", "--dry-run"],
+        ClienteFalso(),
+    )
+
+    assert codigo == 2
+    assert "--repo" in saida["erro"]["mensagem"]
+    assert "--descobrir" in saida["erro"]["mensagem"]
