@@ -33,8 +33,14 @@ from notion_starter import (  # noqa: E402
 from notion_starter import properties as starter_properties  # noqa: E402
 from notion_starter import schema as starter_schema  # noqa: E402
 from notion_starter.services import anexos as svc_anexos  # noqa: E402
+from notion_starter.services import (  # noqa: E402
+    historico_repositorios as svc_historico,
+)
 from notion_starter.services import ingestao as svc_ingestao  # noqa: E402
 from notion_starter.services import relacoes as svc_relacoes  # noqa: E402
+from notion_starter.services import (  # noqa: E402
+    relatorios_diarios as svc_relatorios,
+)
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
 
 from core import workspaces as perfis_workspace  # noqa: E402
@@ -757,6 +763,96 @@ def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -
     )
 
 
+def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Reconstrói relatórios diários a partir do histórico de vários repositórios.
+
+    Um dia de trabalho quase nunca cabe num repositório só: mexe-se na
+    biblioteca, no CLI que a consome e no app que a expõe. Este comando lê todos
+    de uma vez, agrupa por data e escreve **um relatório por dia**, com hora e
+    duração por projeto — nunca só a data.
+
+    É idempotente pela data: dia que já tem relatório é **complementado** (o
+    corpo novo entra abaixo do que já estava), nunca sobrescrito. As
+    propriedades de um relatório existente ficam intactas, porque costumam
+    descrever, em prosa, o mesmo dia com mais contexto do que qualquer log.
+    """
+
+    database_id = _texto_obrigatorio(args.database, "--database")
+    repositorios = [
+        svc_historico.Repositorio.de_par(nome, caminho)
+        for nome, caminho in _pares_chave_valor(args.repo, "--repo").items()
+    ]
+    # Varredura: listar repositório à mão só acha o que já se lembra, e o dia de
+    # trabalho esquecido, por definição, não está nessa lista.
+    for raiz in args.descobrir or []:
+        for encontrado in svc_historico.descobrir_repositorios(raiz):
+            if all(r.nome != encontrado.nome for r in repositorios):
+                repositorios.append(encontrado)
+    if not repositorios:
+        raise CLIError(
+            "Informe ao menos um repositório: "
+            '--repo "Nome do projeto=/caminho/do/repo" ou --descobrir /pasta/raiz.'
+        )
+
+    dias = svc_historico.consolidar_dias(
+        repositorios,
+        desde=_normalizar_texto(args.desde) or "",
+        ate=_normalizar_texto(args.ate) or "",
+        autor=_normalizar_texto(args.autor) or "",
+        com_estatisticas=not args.sem_estatisticas,
+    )
+
+    previa = [
+        {
+            "data": dia.data,
+            "commits": dia.total_commits,
+            "projetos": list(dia.repositorios),
+            "resumo": dia.resumo(),
+        }
+        for dia in dias
+    ]
+
+    if args.dry_run:
+        return {
+            "dry_run": True,
+            "dias": len(dias),
+            "commits": sum(dia.total_commits for dia in dias),
+            "previa": previa,
+        }
+
+    area = _normalizar_texto(args.area)
+    relatorios = []
+    for dia in dias:
+        propriedades: dict[str, Any] = {
+            "Resumo": starter_properties.rich_text(dia.resumo()),
+            "O que fiz": starter_properties.rich_text(dia.o_que_fiz()),
+        }
+        if area:
+            propriedades["Área"] = starter_properties.select(area)
+        if args.status:
+            propriedades["Status"] = starter_properties.status(args.status)
+        relatorios.append(
+            svc_relatorios.RelatorioDiario(
+                data=dia.data,
+                corpo_markdown=svc_historico.corpo_markdown(dia),
+                propriedades=propriedades,
+            )
+        )
+
+    resultado = svc_relatorios.publicar_relatorios(
+        database_id, relatorios, cliente=client_factory()
+    )
+    return {
+        "dias": len(resultado.relatorios),
+        "criadas": resultado.criadas,
+        "complementadas": resultado.complementadas,
+        "paginas": [
+            {"data": r.data, "acao": r.acao, "id": r.page_id, "blocos": r.blocos_escritos}
+            for r in resultado.relatorios
+        ],
+    }
+
+
 def cmd_buscar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     return svc_conteudo.buscar(_normalizar_texto(args.query), cliente=client_factory())
 
@@ -1094,6 +1190,14 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "limpar": [
         "python -m cli --json limpar <page_id> --sim",
         "python -m cli --json limpar <page_id> --sim --apagar-tudo",
+    ],
+    "relatorios-do-git": [
+        'python -m cli --json relatorios-do-git --database <id> --dry-run '
+        '--descobrir ~/Programacao/Github/Repositorios',
+        'python -m cli --json relatorios-do-git --database <id> --dry-run '
+        '--repo "Felixo AI Core=/caminho/Felixo-AI-Core"',
+        'python -m cli --json relatorios-do-git --database <id> --desde 2026-08-01 '
+        '--repo "App=/caminho/app" --repo "Lib=/caminho/lib" --area Trabalho',
     ],
     "schema": [
         "python -m cli --json schema <database_id>",
@@ -1447,6 +1551,48 @@ def construir_parser() -> argparse.ArgumentParser:
         "--desfazer", action="store_true", help="remove a ligação em vez de criá-la"
     )
 
+    relatorios_git = sub.add_parser(
+        "relatorios-do-git",
+        help="reconstrói relatórios diários a partir do histórico de VÁRIOS "
+        "repositórios, um por dia, com hora e duração por projeto; idempotente "
+        "pela data (dia existente é complementado, nunca sobrescrito)",
+    )
+    relatorios_git.add_argument(
+        "--database", required=True, help="database dos relatórios diários"
+    )
+    relatorios_git.add_argument(
+        "--repo",
+        action="append",
+        metavar="NOME=CAMINHO",
+        help='repositório a incluir; repita para vários. Ex.: --repo "Felixo AI '
+        'Core=/home/eu/Felixo-AI-Core". O NOME é o que aparece no relatório',
+    )
+    relatorios_git.add_argument(
+        "--descobrir",
+        action="append",
+        metavar="PASTA",
+        help="varre a pasta e inclui TODOS os repositórios git encontrados "
+        "(até 3 níveis). É o que acha o projeto que você esqueceu de registrar; "
+        "combinável com --repo, que vence no caso de nome repetido",
+    )
+    relatorios_git.add_argument("--desde", help="data ISO inicial (inclusiva)")
+    relatorios_git.add_argument("--ate", help="data ISO final (inclusiva)")
+    relatorios_git.add_argument("--autor", help="filtra por autor, como git --author")
+    relatorios_git.add_argument("--area", help='valor da coluna "Área" nos dias novos')
+    relatorios_git.add_argument("--status", help='valor da coluna "Status" nos dias novos')
+    relatorios_git.add_argument(
+        "--sem-estatisticas",
+        dest="sem_estatisticas",
+        action="store_true",
+        help="não coleta arquivos/linhas por commit (uma chamada de git a menos)",
+    )
+    relatorios_git.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="só mostra os dias que seriam escritos, sem tocar no Notion",
+    )
+
     buscar = sub.add_parser("buscar", help="pesquisa páginas e databases visíveis")
     buscar.add_argument("query", nargs="?", help="texto do título; vazio lista tudo")
 
@@ -1793,6 +1939,8 @@ def executar(
             dados = cmd_schema(args, client_factory=client_factory)
         elif comando == "relacionar":
             dados = cmd_relacionar(args, client_factory=client_factory)
+        elif comando == "relatorios-do-git":
+            dados = cmd_relatorios_do_git(args, client_factory=client_factory)
         elif comando == "buscar":
             dados = cmd_buscar(args, client_factory=client_factory)
         elif comando == "clonar-database":
