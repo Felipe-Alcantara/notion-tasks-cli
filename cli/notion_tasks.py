@@ -7,6 +7,7 @@ services compartilhados com API/MCP. Não monta payload cru do Notion.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -27,6 +28,7 @@ from notion_starter import (  # noqa: E402
     NotionClient,
     NotionConfigurationError,
     NotionHTTPError,
+    NotionSchemaError,
     TaskList,
     construir_inventario,
 )
@@ -520,9 +522,25 @@ def cmd_database_atual(args: argparse.Namespace, *, client_factory: ClientFactor
 
 
 def cmd_escolher_database(args: argparse.Namespace) -> Any:
+    """Define o database padrão, gravando onde a próxima execução vai ler.
+
+    Com perfil ativo, grava **no perfil** — que é quem vence na resolução de
+    credenciais. Gravar só no ``.env`` deixava o perfil sem ``database_id``, e o
+    comando seguinte falhava com "NOTION_DATABASE_ID não configurado" mesmo
+    depois de um "escolher-database" que respondeu sucesso.
+    """
+
     database_id = _texto_obrigatorio(args.database_id, "database_id")
+    perfil = perfis_workspace.resolver_perfil(getattr(args, "perfil", None))
+    if perfil is not None:
+        atualizado = perfis_workspace.definir_database(database_id, perfil.alias)
+        return {
+            "database_id": database_id,
+            "salvo_em": str(perfis_workspace.caminho_em_uso()),
+            "perfil": atualizado.alias,
+        }
     _salvar_database_env(database_id)
-    return {"database_id": database_id, "salvo_em": str(RAIZ / ".env")}
+    return {"database_id": database_id, "salvo_em": str(RAIZ / ".env"), "perfil": ""}
 
 
 def cmd_normalizar_nomes(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -1415,7 +1433,10 @@ def construir_parser() -> argparse.ArgumentParser:
     database_atual = sub.add_parser("database-atual", help="mostra o database configurado")
     database_atual.set_defaults(alias_comando="database-atual")
 
-    escolher = sub.add_parser("escolher-database", help="grava NOTION_DATABASE_ID no .env")
+    escolher = sub.add_parser(
+        "escolher-database",
+        help="define o database padrão (grava no perfil ativo; sem perfil, no .env)",
+    )
     escolher.add_argument("database_id")
 
     normalizar_nomes = sub.add_parser(
@@ -1994,17 +2015,52 @@ def executar(
             for database_id, titulo in exc.databases
         ]
         return 2, dados if args.json else f"Erro: {exc}"
+    except NotionSchemaError as exc:
+        # Erro de uso: a coluna pedida não existe ou é de outro tipo. Falhamos
+        # antes de chamar a API, então a mensagem pode ensinar o caminho certo.
+        mensagem = f"{exc} — rode 'schema <database_id>' para ver as colunas reais."
+        return 2, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
     except (CLIError, ValueError, perfis_workspace.WorkspaceConfigError) as exc:
         return 2, _envelope(False, erro=str(exc)) if args.json else f"Erro: {exc}"
     except (NotionHTTPError, NotionAPIError) as exc:
-        if isinstance(exc, NotionHTTPError) and exc.status_code == 404:
-            mensagem = "Recurso não encontrado."
-        else:
-            mensagem = "Falha ao falar com o Notion."
+        mensagem = _mensagem_erro_notion(exc)
         return 1, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
     except NotionConfigurationError:
         mensagem = "Configuração do Notion inválida."
         return 2, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
+
+
+def _mensagem_erro_notion(exc: NotionAPIError) -> str:
+    """Traduz a falha da API numa mensagem que diz o que fazer a seguir.
+
+    Antes, todo erro que não fosse 404 virava "Falha ao falar com o Notion." — e
+    a resposta 400 do Notion, que nomeia exatamente a propriedade recusada,
+    era descartada. Quem lê (pessoa ou modelo) ficava sem o único dado útil.
+    """
+
+    if not isinstance(exc, NotionHTTPError):
+        return "Falha ao falar com o Notion."
+    if exc.status_code == 404:
+        return "Recurso não encontrado."
+    return f"Notion recusou a requisição (HTTP {exc.status_code}): {_detalhe_notion(exc.body)}"
+
+
+def _detalhe_notion(corpo: str) -> str:
+    """Extrai o ``message`` do corpo de erro do Notion, com o cru de reserva."""
+
+    texto = (corpo or "").strip()
+    if not texto:
+        return "sem detalhe na resposta"
+    try:
+        dados = json.loads(texto)
+    except ValueError:
+        return texto
+    if isinstance(dados, dict):
+        mensagem = str(dados.get("message") or "").strip()
+        codigo = str(dados.get("code") or "").strip()
+        if mensagem:
+            return f"{mensagem} [{codigo}]" if codigo else mensagem
+    return texto
 
 
 def _garantir_saida_utf8() -> None:

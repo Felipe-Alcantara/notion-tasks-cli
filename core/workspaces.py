@@ -12,7 +12,7 @@ import os
 import shutil
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +216,55 @@ def adicionar_perfil(
     ativo = alias_normalizado if ativar or not store.ativo else store.ativo
     salvar_store(WorkspaceStore(ativo=ativo, perfis=perfis), caminho)
     return perfil
+
+
+def definir_database(
+    database_id: str,
+    alias: str | None = None,
+    caminho: Path | None = None,
+) -> WorkspaceProfile:
+    """Grava o database padrao no perfil resolvido (o ativo, por padrao).
+
+    Existe porque ``escolher-database`` gravava so num ``.env`` ao lado do
+    pacote instalado: o perfil ativo continuava sem ``database_id``, vencia o
+    ``.env`` em silencio e o comando seguinte falhava com "NOTION_DATABASE_ID
+    nao configurado". Escolher database e escolher perfil precisam gravar no
+    mesmo lugar.
+
+    Args:
+        database_id: Database que passa a ser o padrao do perfil.
+        alias: Perfil a atualizar; ``None`` usa o resolvido/ativo.
+        caminho: Store alternativo (a suite passa ``tmp_path``).
+
+    Returns:
+        O perfil ja atualizado.
+
+    Raises:
+        WorkspaceConfigError: Se nao houver perfil para atualizar.
+    """
+
+    perfil = resolver_perfil(alias, caminho)
+    if perfil is None:
+        raise WorkspaceConfigError(
+            "Nenhum perfil ativo para guardar o database. "
+            "Crie um com 'perfis adicionar <alias> --token ... --ativar'."
+        )
+    limpo = _texto_opcional(database_id)
+    if limpo is None:
+        raise WorkspaceConfigError("database_id nao pode ficar vazio.")
+    store = carregar_store(caminho)
+    perfis = dict(store.perfis)
+    atualizado = replace(perfil, database_id=limpo)
+    perfis[perfil.alias] = atualizado
+    salvar_store(WorkspaceStore(ativo=store.ativo, perfis=perfis), caminho)
+    os.environ[ENV_DATABASE] = limpo
+    return atualizado
+
+
+def caminho_em_uso(caminho: Path | None = None) -> Path:
+    """Arquivo de perfis efetivamente em uso, ja considerada a migracao."""
+
+    return _caminho(caminho)
 
 
 def selecionar_perfil(alias: str, caminho: Path | None = None) -> WorkspaceProfile:
