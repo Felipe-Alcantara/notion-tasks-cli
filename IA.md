@@ -200,3 +200,73 @@ a linha com um Mock. Os fakes passaram a declarar `set`/`conteudo` como `None`.
 **Validação real** (2026-08-17): todos os caminhos rodados contra o workspace do
 usuário, com quatro linhas de teste criadas e arquivadas ao fim. 166 testes
 verdes, `ruff` limpo.
+
+---
+
+## [2026-08-24] Os perfis saíram de junto do pacote e foram para a pasta de configuração (0.2.1)
+
+### O sintoma
+
+`notion-tasks perfis listar` respondeu **Nenhum perfil configurado** logo depois de
+uma reinstalação, com os quatro perfis reais salvos. Pareceu perda de dado — e dado
+aqui é token de integração do Notion.
+
+### A causa
+
+`core/workspaces.py` derivava o endereço do store de `__file__`:
+
+```python
+ARQUIVO_PADRAO = Path(__file__).resolve().parents[1] / ".notion-workspaces.json"
+```
+
+O arquivo morava **ao lado do pacote instalado**. Trocar o modo de instalação
+troca o endereço:
+
+| Modo | Onde a CLI procurava |
+| --- | --- |
+| não editável | `site-packages/.notion-workspaces.json` |
+| editável | `modules/notion-tasks-cli/.notion-workspaces.json` |
+
+Nada se perdia, mas só se recuperava quem soubesse procurar. E cada modo deixava
+mais uma cópia de tokens espalhada pelo disco — na máquina do Felipe havia duas.
+Uma delas dentro de um repositório git, protegida por uma linha de `.gitignore`.
+
+### A decisão
+
+Store na pasta de configuração do usuário, pela convenção do sistema:
+`$XDG_CONFIG_HOME/notion-tasks/` (padrão `~/.config/notion-tasks/`) e
+`%APPDATA%\notion-tasks\` no Windows. Arquivo `600`, pasta `700`.
+
+**Migração automática na primeira leitura**, uma vez, com aviso em `stderr`. Se ela
+falhar (disco somente leitura, permissão), a CLI **continua usando o endereço
+antigo** em vez de dizer que não há perfil — manter o usuário funcionando no lugar
+errado é melhor do que fingir amnésia.
+
+### Duas armadilhas que a implementação encontrou
+
+**1. `chmod 700` no diretório-pai quase fechou a HOME.** A primeira versão
+restringia a pasta do store sempre. Como o parâmetro `caminho` aceita qualquer
+lugar, um store apontado para dentro da HOME faria a CLI trancar a HOME inteira.
+Agora `_garantir_pasta` só restringe a pasta **que ela mesma criou**; pasta
+preexistente não é tocada, e há teste para isso.
+
+**2. O teste que deveria proteger a mudança não protegia.** A asserção rodava no
+processo da suíte, onde a fixture `perfis_isolados` (autouse) troca
+`ARQUIVO_PADRAO` por `tmp_path` — necessário para o perfil real não vazar, mas
+apaga justamente o valor que o teste precisava observar. **Medido:** com a
+mutação `ARQUIVO_PADRAO = Path(__file__)...`, os 16 testes passavam. O teste passou
+a ler o valor num subprocesso e a mutação passou a derrubá-lo, como devia.
+
+Também por causa do `pathlib`: testar a variante do Windows trocando `os.name` no
+processo faz o próprio `pathlib` construir `WindowsPath` e explodir em POSIX. A
+decisão virou função pura — `decidir_pasta_configuracao(windows=, ambiente=, home=)`
+— e o sistema entra por parâmetro.
+
+### Validação
+
+179 testes verdes, `ruff` limpo. Migração real medida na máquina: os quatro perfis
+saíram de `modules/notion-tasks-cli/` para `~/.config/notion-tasks/`, arquivo `600`,
+pasta `700`, aviso impresso uma vez só. Critério de ponta: instalação trocada de
+editável para não editável e de volta — `perfis listar` devolveu exatamente a mesma
+lista nos dois modos. Ao fim, restou **uma** cópia do store no disco, fora de
+qualquer repositório git.

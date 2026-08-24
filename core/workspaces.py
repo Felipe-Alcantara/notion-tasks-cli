@@ -9,16 +9,68 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from notion_starter.constants import NOTION_TOKEN_PREFIX
 
-ARQUIVO_PADRAO = Path(__file__).resolve().parents[1] / ".notion-workspaces.json"
+APP_NOME = "notion-tasks"
+ARQUIVO_NOME = ".notion-workspaces.json"
+
+#: Onde o store morava ate 24/08/2026: ao lado do pacote instalado. Continua
+#: sendo lido para migrar quem ja tinha perfis salvos.
+ARQUIVO_LEGADO = Path(__file__).resolve().parents[1] / ARQUIVO_NOME
+
 ENV_PERFIL = "NOTION_PROFILE"
 ENV_TOKEN = "NOTION_TOKEN"
 ENV_DATABASE = "NOTION_DATABASE_ID"
+
+
+def decidir_pasta_configuracao(
+    *, windows: bool, ambiente: Mapping[str, str], home: Path
+) -> Path:
+    """Decide a pasta de configuracao a partir do sistema, ambiente e home.
+
+    Funcao pura de proposito: o sistema entra por parametro em vez de ser lido
+    de ``os.name``. Testar a variante do Windows trocando ``os.name`` no
+    processo faria o proprio ``pathlib`` passar a construir ``WindowsPath`` e
+    quebrar em maquina POSIX — o teste derrubaria o interpretador, nao o
+    comportamento.
+    """
+
+    if windows:
+        base = ambiente.get("APPDATA")
+        raiz = Path(base) if base else home / "AppData" / "Roaming"
+    else:
+        base = ambiente.get("XDG_CONFIG_HOME")
+        raiz = Path(base) if base else home / ".config"
+    return raiz / APP_NOME
+
+
+def pasta_configuracao() -> Path:
+    """Pasta de configuracao do usuario, conforme a convencao do sistema.
+
+    ``%APPDATA%/notion-tasks`` no Windows, ``$XDG_CONFIG_HOME/notion-tasks``
+    (com ``~/.config`` de padrao) no restante.
+    """
+
+    return decidir_pasta_configuracao(
+        windows=os.name == "nt", ambiente=os.environ, home=Path.home()
+    )
+
+
+def caminho_padrao() -> Path:
+    """Endereco canonico do store de perfis."""
+
+    return pasta_configuracao() / ARQUIVO_NOME
+
+
+#: Resolvido no import para que a suite consiga trocar por ``tmp_path``.
+ARQUIVO_PADRAO = caminho_padrao()
 
 
 class WorkspaceConfigError(ValueError):
@@ -125,14 +177,12 @@ def salvar_store(store: WorkspaceStore, caminho: Path | None = None) -> None:
             for alias, perfil in sorted(store.perfis.items())
         },
     }
+    _garantir_pasta(caminho.parent)
     caminho.write_text(
         json.dumps(dados, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    try:
-        os.chmod(caminho, 0o600)
-    except OSError:
-        pass
+    _restringir(caminho, 0o600)
 
 
 def adicionar_perfil(
@@ -242,7 +292,63 @@ def aplicar_perfil(
 
 
 def _caminho(caminho: Path | None) -> Path:
-    return caminho or ARQUIVO_PADRAO
+    """Resolve o arquivo de perfis, migrando o endereco antigo na primeira vez.
+
+    Um caminho explicito (a suite, ou quem quiser outro store) manda e nao
+    dispara migracao nenhuma.
+    """
+
+    if caminho is not None:
+        return caminho
+    return _migrar_legado(ARQUIVO_PADRAO)
+
+
+def _migrar_legado(destino: Path) -> Path:
+    """Move o store do endereco antigo para o canonico, uma unica vez.
+
+    Ate 24/08/2026 o arquivo morava ao lado do pacote instalado, entao trocar o
+    modo de instalacao (editavel <-> nao editavel) trocava o endereco e a CLI
+    respondia "Nenhum perfil configurado" — parecia perda de dado, e cada modo
+    deixava mais uma copia de tokens espalhada pelo disco.
+
+    Se a migracao nao for possivel (disco somente leitura, permissao), o antigo
+    continua sendo usado: e melhor manter o usuario funcionando no lugar errado
+    do que fingir que ele nao tem perfil nenhum.
+    """
+
+    if destino.exists() or not ARQUIVO_LEGADO.exists():
+        return destino
+    try:
+        _garantir_pasta(destino.parent)
+        shutil.move(str(ARQUIVO_LEGADO), str(destino))
+        _restringir(destino, 0o600)
+    except OSError:
+        return ARQUIVO_LEGADO
+    print(f"Perfis migrados para {destino}", file=sys.stderr)
+    return destino
+
+
+def _garantir_pasta(pasta: Path) -> None:
+    """Cria a pasta do store, restringindo a permissao **apenas se a criou**.
+
+    A restricao vale para a pasta que este codigo passa a existir; nao para uma
+    que ja estava la. Sem essa distincao, um caminho de store apontado para
+    dentro da HOME faria a CLI fechar a HOME inteira em 0700.
+    """
+
+    if pasta.exists():
+        return
+    pasta.mkdir(parents=True, exist_ok=True)
+    _restringir(pasta, 0o700)
+
+
+def _restringir(alvo: Path, modo: int) -> None:
+    """Restringe a permissao, ignorando sistemas que nao suportam chmod."""
+
+    try:
+        os.chmod(alvo, modo)
+    except OSError:
+        pass
 
 
 def _normalizar_alias(alias: str) -> str:

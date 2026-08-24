@@ -171,6 +171,25 @@ notion-tasks perfis usar pessoal
 
 Nunca versione tokens, IDs reais ou `.notion-workspaces.json`.
 
+### Onde os perfis ficam guardados
+
+Na pasta de configuração do usuário, seguindo a convenção do sistema:
+
+| Sistema | Caminho |
+| --- | --- |
+| Linux / macOS | `$XDG_CONFIG_HOME/notion-tasks/` (padrão: `~/.config/notion-tasks/`) |
+| Windows | `%APPDATA%\notion-tasks\` |
+
+O arquivo é criado com permissão `600` e a pasta com `700`.
+
+> **Se você tinha perfis salvos antes da versão 0.2.1**, eles moravam ao lado do
+> pacote instalado — o que fazia trocar o modo de instalação (editável ↔ não
+> editável) parecer apagar os perfis, porque a CLI passava a procurar noutro
+> endereço. Não é preciso fazer nada: na primeira execução a CLI move o arquivo
+> para o novo lugar e avisa na saída de erro. Se a migração não for possível
+> (disco somente leitura, permissão), a CLI continua usando o endereço antigo em
+> vez de fingir que não há perfil nenhum.
+
 ---
 
 ## 💻 Desenvolvimento
