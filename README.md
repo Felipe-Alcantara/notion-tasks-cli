@@ -72,7 +72,8 @@ notion-tasks-cli/
 
 ## 🚀 Funcionalidades
 
-- **Tarefas** — listar, criar, editar, mover e concluir.
+- **Tarefas** — listar, criar, editar, mover e concluir; `criar` também aceita
+  databases genéricos ao descobrir a coluna de título pelo schema.
 - **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas.
 - **Propriedades** — substituir ou acrescentar valores em linhas de database.
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
@@ -107,10 +108,14 @@ python start_app.py
 ```bash
 # Tarefas
 notion-tasks listar
-notion-tasks criar --titulo "Revisar proposta" --status "Em andamento"
-notion-tasks editar <id> --titulo "Novo título"
-notion-tasks mover <id> --status "Concluído"
-notion-tasks concluir <id>
+notion-tasks criar "Revisar proposta" --status "Em andamento"
+notion-tasks editar <id> --nome "Novo título"
+notion-tasks mover <id> "Concluído"
+notion-tasks concluir <id> "Concluído"
+
+# Linha em qualquer database (a coluna title é descoberta automaticamente)
+notion-tasks criar "Relatório — 25/08/2026" \
+  --set "Data=2026-08-25" --set "Status=Concluído" --conteudo "# Resultado"
 
 # Workspace
 notion-tasks --perfil cliente listar

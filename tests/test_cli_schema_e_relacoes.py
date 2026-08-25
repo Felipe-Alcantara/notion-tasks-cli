@@ -18,6 +18,7 @@ from unittest import mock
 from cli import notion_tasks as cli
 
 DATABASE = "30296e2d-cd39-4cf3-8bbd-3fb2f53c0195"
+DATABASE_RELATORIOS = "62971953-ca6e-4aaa-97c7-320e0cfd4ae7"
 
 
 class ClienteFalso:
@@ -69,6 +70,53 @@ class ClienteFalso:
     def anexar_blocos(self, page_id: str, lote: list[dict[str, Any]]) -> dict[str, Any]:
         self.anexados.extend(lote)
         return {"results": lote}
+
+
+class ClienteRelatoriosFalso(ClienteFalso):
+    """Database genérico cujo título não se chama ``Tarefa``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.criadas: list[tuple[str, dict[str, Any]]] = []
+
+    def get_database(self, database_id: str) -> dict[str, Any]:
+        return {
+            "id": DATABASE_RELATORIOS,
+            "title": [{"plain_text": "Relatórios diários"}],
+            "properties": {
+                "Relatório": {"type": "title", "title": {}},
+                "Data": {"type": "date", "date": {}},
+                "Status": {
+                    "type": "status",
+                    "status": {"options": [{"name": "Concluído"}]},
+                },
+            },
+        }
+
+    def criar_pagina(
+        self, database_id: str, propriedades: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.criadas.append((database_id, propriedades))
+        return {
+            "id": "relatorio-novo",
+            "url": "https://notion.so/relatorio-novo",
+            "properties": {
+                "Relatório": {
+                    "type": "title",
+                    "title": [{"plain_text": "Relatório — 25/08/2026"}],
+                }
+            },
+        }
+
+    def obter_pagina(self, page_id: str) -> dict[str, Any]:
+        return {
+            "id": page_id,
+            "properties": {
+                "Relatório": {"type": "title", "title": []},
+                "Data": {"type": "date", "date": None},
+                "Status": {"type": "status", "status": None},
+            },
+        }
 
 
 def _executar(argv: list[str], cliente: ClienteFalso) -> tuple[int, Any]:
@@ -273,6 +321,55 @@ def test_criar_sem_extras_nao_faz_chamada_a_mais():
     assert codigo == 0
     assert cliente.patches == []
     assert "propriedades" not in saida["dados"]
+
+
+def test_criar_funciona_em_database_generico_com_set_e_conteudo():
+    cliente = ClienteRelatoriosFalso()
+
+    codigo, saida = cli.executar(
+        [
+            "--json",
+            "criar",
+            "Relatório — 25/08/2026",
+            "--set",
+            "Data=2026-08-25",
+            "--set",
+            "Status=Concluído",
+            "--conteudo",
+            "# Resultado",
+        ],
+        tasklist_factory=lambda: cli.TaskList(cliente, DATABASE_RELATORIOS),
+        client_factory=lambda: cliente,
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["nome"] == "Relatório — 25/08/2026"
+    assert list(cliente.criadas[0][1]) == ["Relatório"]
+    assert cliente.patches[0][1] == {
+        "Data": {"date": {"start": "2026-08-25"}},
+        "Status": {"status": {"name": "Concluído"}},
+    }
+    assert saida["dados"]["blocos_anexados"] == 1
+
+
+def test_erro_http_expoe_status_e_corpo_retornado_pelo_notion():
+    class ClienteComErro(ClienteFalso):
+        def get_database(self, database_id: str) -> dict[str, Any]:
+            raise cli.NotionHTTPError(
+                400,
+                '{"object":"error","code":"validation_error",'
+                '"message":"Relatório is not a property"}',
+            )
+
+    codigo, saida = _executar(
+        ["--json", "schema", DATABASE_RELATORIOS], ClienteComErro()
+    )
+
+    assert codigo == 1
+    mensagem = saida["erro"]["mensagem"]
+    assert "HTTP 400" in mensagem
+    assert "validation_error" in mensagem
+    assert "Relatório is not a property" in mensagem
 
 
 def test_falha_ao_completar_reporta_o_id_da_linha_ja_criada():

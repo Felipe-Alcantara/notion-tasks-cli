@@ -340,18 +340,21 @@ def cmd_criar(
     tasklist_factory: TaskListFactory,
     client_factory: ClientFactory = _criar_client,
 ) -> Any:
-    """Cria uma tarefa nova.
+    """Cria uma linha nova no database atual.
 
-    IMPORTANTE: Valida status contra opções disponíveis no database para evitar
-    erro "Invalid status option" da API do Notion.
+    O ``TaskList`` descobre a coluna de título e só aplica os atalhos de tarefa
+    (status, prazo, duração e área) quando as respectivas colunas existem.
+    ``--set`` completa quaisquer outras propriedades depois da criação.
 
-    Problema conhecido: CLI falhava com status inválido que não existe no schema.
-    Solução: Validar status contra opções do database antes de enviar.
+    Quando ``--status`` é usado, valida o valor contra as opções do modelo de
+    tarefas antes de enviar, evitando ``Invalid status option`` da API.
     """
+    tasklist = tasklist_factory()
+
     # Validar status contra opções disponíveis (se fornecido)
     status = _normalizar_texto(args.status)
     if status:
-        opcoes = svc.listar_opcoes(tasklist=tasklist_factory())
+        opcoes = svc.listar_opcoes(tasklist=tasklist)
         status_validos = opcoes.get("status", [])
         if status not in status_validos:
             raise CLIError(
@@ -364,7 +367,7 @@ def cmd_criar(
         prazo=_normalizar_texto(args.prazo),
         duracao=_normalizar_texto(args.duracao),
         areas=_lista_csv(args.area),
-        tasklist=tasklist_factory(),
+        tasklist=tasklist,
     )
     dados = _tarefa_dict(tarefa)
 
@@ -1371,7 +1374,9 @@ def construir_parser() -> argparse.ArgumentParser:
     ler = sub.add_parser("ler", help="lê uma tarefa pelo ID")
     ler.add_argument("task_id")
 
-    criar = sub.add_parser("criar", help="cria uma tarefa")
+    criar = sub.add_parser(
+        "criar", help="cria uma linha no database atual (tarefas ou schema genérico)"
+    )
     criar.add_argument("nome")
     criar.add_argument("--status")
     criar.add_argument("--prazo")
@@ -1387,7 +1392,7 @@ def construir_parser() -> argparse.ArgumentParser:
     )
     criar.add_argument(
         "--conteudo",
-        help="Markdown do corpo da tarefa, escrito logo após as propriedades — "
+        help="Markdown do corpo da linha, escrito logo após as propriedades — "
         "fecha criar + editar-linha + escrever numa chamada só",
     )
 
@@ -1997,10 +2002,17 @@ def executar(
     except (CLIError, ValueError, perfis_workspace.WorkspaceConfigError) as exc:
         return 2, _envelope(False, erro=str(exc)) if args.json else f"Erro: {exc}"
     except (NotionHTTPError, NotionAPIError) as exc:
-        if isinstance(exc, NotionHTTPError) and exc.status_code == 404:
-            mensagem = "Recurso não encontrado."
+        if isinstance(exc, NotionHTTPError):
+            prefixo = (
+                "Recurso não encontrado."
+                if exc.status_code == 404
+                else "Falha ao falar com o Notion."
+            )
+            mensagem = f"{prefixo} HTTP {exc.status_code}."
+            if exc.body.strip():
+                mensagem += f" Corpo retornado pelo Notion: {exc.body}"
         else:
-            mensagem = "Falha ao falar com o Notion."
+            mensagem = f"Falha ao falar com o Notion: {exc}"
         return 1, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
     except NotionConfigurationError:
         mensagem = "Configuração do Notion inválida."

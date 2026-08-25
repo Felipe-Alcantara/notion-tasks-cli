@@ -270,3 +270,24 @@ pasta `700`, aviso impresso uma vez só. Critério de ponta: instalação trocad
 editável para não editável e de volta — `perfis listar` devolveu exatamente a mesma
 lista nos dois modos. Ao fim, restou **uma** cópia do store no disco, fora de
 qualquer repositório git.
+
+---
+
+## [2026-08-25] `criar` funciona fora do database de tarefas
+
+O comando dizia aceitar qualquer `--set`, mas a primeira chamada ainda criava a
+linha pelo `TaskList` com o título fixo `Tarefa`. Em `Relatórios diários`, cuja
+coluna title é `Relatório`, a API recusava o payload antes de `Data`, `Status` e o
+corpo serem preenchidos.
+
+A descoberta do título e a omissão dos campos de tarefa ausentes ficaram no
+`notion-starter`; a CLI permaneceu borda fina. O mesmo `TaskList` agora é
+reutilizado entre a validação de status e a criação, aproveitando o cache de
+schema. Erros HTTP deixaram de virar apenas "Falha ao falar com o Notion": a
+saída inclui status e o corpo (truncado e tipado pelo cliente), que normalmente
+contém `code` e `message` acionáveis.
+
+**Validação.** 181 testes verdes e `ruff` limpo. Prova real nos perfis
+`relatorios` e `home-pessoal`: criação com `--set Data`, `--set Status` e
+`--conteudo` no primeiro; criação com `--status`/`--duracao` no segundo. As duas
+linhas temporárias foram arquivadas ao fim.
