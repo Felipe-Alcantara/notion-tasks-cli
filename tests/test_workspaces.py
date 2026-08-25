@@ -105,9 +105,7 @@ def test_pasta_de_configuracao_respeita_o_xdg_no_posix(tmp_path):
 
 
 def test_pasta_de_configuracao_cai_para_dot_config_sem_xdg(tmp_path):
-    pasta = workspaces.decidir_pasta_configuracao(
-        windows=False, ambiente={}, home=tmp_path
-    )
+    pasta = workspaces.decidir_pasta_configuracao(windows=False, ambiente={}, home=tmp_path)
 
     assert pasta == tmp_path / ".config" / "notion-tasks"
 
@@ -121,9 +119,7 @@ def test_pasta_de_configuracao_usa_appdata_no_windows(tmp_path):
 
 
 def test_windows_sem_appdata_cai_para_o_roaming_da_home(tmp_path):
-    pasta = workspaces.decidir_pasta_configuracao(
-        windows=True, ambiente={}, home=tmp_path
-    )
+    pasta = workspaces.decidir_pasta_configuracao(windows=True, ambiente={}, home=tmp_path)
 
     assert pasta == tmp_path / "AppData" / "Roaming" / "notion-tasks"
 
@@ -139,11 +135,7 @@ def test_endereco_do_store_nao_depende_de_onde_o_pacote_esta_instalado():
     derivado de ``__file__`` passava despercebido.
     """
 
-    codigo = (
-        "from core import workspaces as w;"
-        "print(w.ARQUIVO_PADRAO);"
-        "print(w.caminho_padrao())"
-    )
+    codigo = "from core import workspaces as w;print(w.ARQUIVO_PADRAO);print(w.caminho_padrao())"
     saida = subprocess.run(
         [sys.executable, "-c", codigo],
         cwd=Path(__file__).resolve().parents[1],
@@ -164,6 +156,7 @@ def test_migra_o_store_antigo_na_primeira_leitura(monkeypatch, tmp_path, capsys)
     workspaces.adicionar_perfil(alias="pessoal", token=TOKEN_1, caminho=legado)
     novo = tmp_path / "config" / "notion-tasks" / ".notion-workspaces.json"
     monkeypatch.setattr(workspaces, "ARQUIVO_LEGADO", legado)
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (legado,))
     monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", novo)
 
     store = workspaces.carregar_store()
@@ -175,6 +168,31 @@ def test_migra_o_store_antigo_na_primeira_leitura(monkeypatch, tmp_path, capsys)
     assert "migrados" in capsys.readouterr().err
 
 
+def test_migra_do_segundo_endereco_legado(monkeypatch, tmp_path, capsys):
+    """O store do modo nao-editavel (site-packages) tambem tem que ser achado.
+
+    "Ao lado do pacote" resolvia para a raiz do repositorio no modo editavel e
+    para o ``site-packages`` no nao-editavel. Enquanto a migracao olhava um
+    endereco so, reinstalar a CLI no outro modo respondia "Nenhum perfil
+    configurado" com o arquivo intacto no disco.
+    """
+
+    raiz_do_repo = tmp_path / "repo" / ".notion-workspaces.json"
+    site_packages = tmp_path / "site-packages" / ".notion-workspaces.json"
+    site_packages.parent.mkdir(parents=True)
+    workspaces.adicionar_perfil(alias="relatorios", token=TOKEN_1, caminho=site_packages)
+    novo = tmp_path / "config" / "notion-tasks" / ".notion-workspaces.json"
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (raiz_do_repo, site_packages))
+    monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", novo)
+
+    store = workspaces.carregar_store()
+
+    assert "relatorios" in store.perfis
+    assert novo.exists()
+    assert not site_packages.exists()
+    assert "migrados" in capsys.readouterr().err
+
+
 def test_store_migrado_continua_restrito_ao_dono(monkeypatch, tmp_path):
     if os.name == "nt":
         pytest.skip("Permissao POSIX nao se aplica ao Windows.")
@@ -183,6 +201,7 @@ def test_store_migrado_continua_restrito_ao_dono(monkeypatch, tmp_path):
     workspaces.adicionar_perfil(alias="pessoal", token=TOKEN_1, caminho=legado)
     novo = tmp_path / "config" / "notion-tasks" / ".notion-workspaces.json"
     monkeypatch.setattr(workspaces, "ARQUIVO_LEGADO", legado)
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (legado,))
     monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", novo)
 
     workspaces.carregar_store()
@@ -198,6 +217,7 @@ def test_nao_migra_quando_o_canonico_ja_existe(monkeypatch, tmp_path):
     novo = tmp_path / "config" / ".notion-workspaces.json"
     workspaces.adicionar_perfil(alias="atual", token=TOKEN_2, caminho=novo)
     monkeypatch.setattr(workspaces, "ARQUIVO_LEGADO", legado)
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (legado,))
     monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", novo)
 
     store = workspaces.carregar_store()
@@ -208,6 +228,7 @@ def test_nao_migra_quando_o_canonico_ja_existe(monkeypatch, tmp_path):
 
 def test_sem_nenhum_dos_dois_a_lista_e_vazia(monkeypatch, tmp_path):
     monkeypatch.setattr(workspaces, "ARQUIVO_LEGADO", tmp_path / "nao-existe.json")
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (tmp_path / "nao-existe.json",))
     monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", tmp_path / "config" / "novo.json")
 
     store = workspaces.carregar_store()
@@ -222,6 +243,7 @@ def test_caminho_explicito_nunca_dispara_migracao(monkeypatch, tmp_path):
     legado.parent.mkdir()
     workspaces.adicionar_perfil(alias="pessoal", token=TOKEN_1, caminho=legado)
     monkeypatch.setattr(workspaces, "ARQUIVO_LEGADO", legado)
+    monkeypatch.setattr(workspaces, "ARQUIVOS_LEGADOS", (legado,))
     monkeypatch.setattr(workspaces, "ARQUIVO_PADRAO", tmp_path / "config" / "novo.json")
 
     store = workspaces.carregar_store(caminho=tmp_path / "outro.json")

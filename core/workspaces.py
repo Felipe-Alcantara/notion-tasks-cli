@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+import sysconfig
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -25,14 +26,41 @@ ARQUIVO_NOME = ".notion-workspaces.json"
 #: sendo lido para migrar quem ja tinha perfis salvos.
 ARQUIVO_LEGADO = Path(__file__).resolve().parents[1] / ARQUIVO_NOME
 
+
+def _enderecos_legados() -> tuple[Path, ...]:
+    """Todos os "ao lado do pacote" que ja valeram, sem repetir endereco.
+
+    Nao era um lugar so: no modo editavel o pacote roda da raiz do repositorio
+    (``ARQUIVO_LEGADO``), no nao-editavel roda de um ``site-packages``. Trocar o
+    modo de instalacao trocava o endereco, e olhar so um deles fazia a CLI
+    responder "Nenhum perfil configurado" com o arquivo intacto no outro.
+
+    O ``site-packages`` vem de ``sysconfig``, e nao de um ``parents[n]`` do
+    fonte: no modo editavel o fonte mora no repositorio, entao subir diretorios
+    a partir dele aponta para dentro do proprio repositorio — nunca para a pasta
+    de instalacao onde o store realmente ficou.
+    """
+
+    candidatos = [ARQUIVO_LEGADO]
+    for chave in ("purelib", "platlib"):
+        pasta = sysconfig.get_paths().get(chave)
+        if pasta:
+            candidatos.append(Path(pasta) / ARQUIVO_NOME)
+    unicos: list[Path] = []
+    for caminho in candidatos:
+        if caminho not in unicos:
+            unicos.append(caminho)
+    return tuple(unicos)
+
+
+ARQUIVOS_LEGADOS = _enderecos_legados()
+
 ENV_PERFIL = "NOTION_PROFILE"
 ENV_TOKEN = "NOTION_TOKEN"
 ENV_DATABASE = "NOTION_DATABASE_ID"
 
 
-def decidir_pasta_configuracao(
-    *, windows: bool, ambiente: Mapping[str, str], home: Path
-) -> Path:
+def decidir_pasta_configuracao(*, windows: bool, ambiente: Mapping[str, str], home: Path) -> Path:
     """Decide a pasta de configuracao a partir do sistema, ambiente e home.
 
     Funcao pura de proposito: o sistema entra por parametro em vez de ser lido
@@ -358,21 +386,27 @@ def _migrar_legado(destino: Path) -> Path:
     Ate 24/08/2026 o arquivo morava ao lado do pacote instalado, entao trocar o
     modo de instalacao (editavel <-> nao editavel) trocava o endereco e a CLI
     respondia "Nenhum perfil configurado" — parecia perda de dado, e cada modo
-    deixava mais uma copia de tokens espalhada pelo disco.
+    deixava mais uma copia de tokens espalhada pelo disco. Por isso a busca
+    percorre ``ARQUIVOS_LEGADOS``, e nao um endereco unico: o store escrito no
+    modo nao-editavel fica no ``site-packages``, invisivel para quem so olha a
+    raiz do repositorio.
 
     Se a migracao nao for possivel (disco somente leitura, permissao), o antigo
     continua sendo usado: e melhor manter o usuario funcionando no lugar errado
     do que fingir que ele nao tem perfil nenhum.
     """
 
-    if destino.exists() or not ARQUIVO_LEGADO.exists():
+    if destino.exists():
+        return destino
+    origem = next((caminho for caminho in ARQUIVOS_LEGADOS if caminho.exists()), None)
+    if origem is None:
         return destino
     try:
         _garantir_pasta(destino.parent)
-        shutil.move(str(ARQUIVO_LEGADO), str(destino))
+        shutil.move(str(origem), str(destino))
         _restringir(destino, 0o600)
     except OSError:
-        return ARQUIVO_LEGADO
+        return origem
     print(f"Perfis migrados para {destino}", file=sys.stderr)
     return destino
 
