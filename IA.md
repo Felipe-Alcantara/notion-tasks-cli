@@ -271,6 +271,36 @@ editável para não editável e de volta — `perfis listar` devolveu exatamente
 lista nos dois modos. Ao fim, restou **uma** cópia do store no disco, fora de
 qualquer repositório git.
 
+### Validação em Windows (27/08/2026) — e um risco real encontrado
+
+A entrada acima media só Linux. Três pontos conferidos agora num Python 3.14 no
+Windows, com dados sintéticos (sem tocar no store real desta máquina):
+
+1. **`pasta_configuracao()` devolve o `%APPDATA%` de verdade** —
+   `C:\Users\...\AppData\Roaming\notion-tasks`, não o fallback `~/AppData/Roaming`.
+2. **A migração funciona** — `.notion-workspaces.json` sintético num "endereço
+   antigo" isolado, primeira chamada de `_migrar_legado` move o arquivo, imprime
+   o aviso uma vez em stderr, o antigo deixa de existir e `carregar_store` lê os
+   perfis migrados sem diferença de conteúdo.
+3. **O risco de maior severidade da task era real, e agora está medido.**
+   `os.chmod` é, como o próprio código já admitia, um no-op de fato no Windows —
+   e a ACL herdada não é equivalente a um `0600` POSIX nesta máquina: a pasta
+   `%APPDATA%\Roaming` (e, por herança, `%APPDATA%\notion-tasks\` e qualquer
+   arquivo criado dentro) concede `(RX)` — Leitura e Execução — ao grupo local
+   `CodexSandboxUsers`, que existe nesta máquina para isolar sessões do Codex CLI
+   (`CodexSandboxOffline`, `CodexSandboxOnline`). Confirmado num arquivo real
+   criado dentro da pasta (`icacls`): a herança inclui leitura de conteúdo, não
+   só listagem de diretório. Isto significa que **um processo sandboxed do Codex
+   nesta máquina pode ler o token do Notion do usuário**, e nada no código atual
+   detecta ou avisa isso — `_restringir` engole o `OSError` de propósito.
+
+   Isto é específico da configuração desta máquina (o grupo é "managed" pelo
+   próprio Codex, não algo que o `notion-tasks-cli` controla), não um defeito
+   universal do Windows: um perfil sem esse grupo de sandbox teria a ACL
+   default de `%APPDATA%` restrita a dono + SYSTEM + Administradores, que já
+   seria aceitável. Mas o código não tem como saber disso, e hoje não tenta.
+   Virou task própria — não é escopo desta consertar em cima da hora.
+
 ---
 
 ## [2026-08-25] `criar` funciona fora do database de tarefas
