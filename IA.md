@@ -294,6 +294,13 @@ Windows, com dados sintéticos (sem tocar no store real desta máquina):
    nesta máquina pode ler o token do Notion do usuário**, e nada no código atual
    detecta ou avisa isso — `_restringir` engole o `OSError` de propósito.
 
+   **Não ficou hipotético.** No meio desta mesma investigação, `carregar_store()`
+   disparou a migração real desta máquina (o `.notion-workspaces.json` do
+   repositório, com os tokens `felipe`/`flavia` de verdade, ainda não tinha sido
+   migrado). O arquivo real resultante em `%APPDATA%\notion-tasks\` tem a mesma
+   ACL medida acima — `CodexSandboxUsers:(I)(RX)` — confirmada com `icacls` no
+   arquivo de credenciais real, não numa cópia sintética.
+
    Isto é específico da configuração desta máquina (o grupo é "managed" pelo
    próprio Codex, não algo que o `notion-tasks-cli` controla), não um defeito
    universal do Windows: um perfil sem esse grupo de sandbox teria a ACL
