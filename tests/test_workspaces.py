@@ -268,3 +268,80 @@ def test_pasta_preexistente_nao_tem_a_permissao_alterada(monkeypatch, tmp_path):
     workspaces.adicionar_perfil(alias="pessoal", token=TOKEN_1, caminho=pasta / "s.json")
 
     assert pasta.stat().st_mode & 0o777 == antes
+
+
+def test_restringir_no_windows_usa_icacls_sem_heranca(monkeypatch, tmp_path):
+    """No Windows, ``os.chmod`` nao aplica ACL — a restricao real e via icacls.
+
+    Medido em 27/08/2026: `os.chmod` silencioso deixava o token legivel por um
+    grupo herdado de `%APPDATA%`. `_restringir` no Windows precisa remover a
+    heranca e conceder so ao dono, SYSTEM e Administradores.
+    """
+
+    alvo = tmp_path / "s.json"
+    alvo.write_text("{}", encoding="utf-8")
+    chamadas: list[list[str]] = []
+
+    def _run_falso(comando, capture_output, text, check):
+        chamadas.append(comando)
+        return subprocess.CompletedProcess(comando, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(workspaces.os, "name", "nt")
+    monkeypatch.setattr(
+        workspaces.os.environ,
+        "get",
+        lambda chave, default=None: {"USERNAME": "flavia"}.get(chave, default),
+    )
+    monkeypatch.setattr(workspaces.subprocess, "run", _run_falso)
+
+    workspaces._restringir(alvo, 0o600)
+
+    assert len(chamadas) == 1
+    comando = chamadas[0]
+    assert comando[0] == "icacls"
+    assert comando[1] == str(alvo)
+    assert "/inheritance:r" in comando
+    assert "flavia:F" in comando
+    assert "SYSTEM:F" in comando
+    assert "*S-1-5-32-544:F" in comando
+
+
+def test_restringir_no_windows_avisa_em_stderr_se_icacls_falhar(monkeypatch, tmp_path, capsys):
+    """Falha ao restringir vira aviso visivel, nao um `except OSError: pass` mudo."""
+
+    alvo = tmp_path / "s.json"
+    alvo.write_text("{}", encoding="utf-8")
+
+    def _run_falso(comando, capture_output, text, check):
+        return subprocess.CompletedProcess(
+            comando, returncode=5, stdout="", stderr="Acesso negado."
+        )
+
+    monkeypatch.setattr(workspaces.os, "name", "nt")
+    monkeypatch.setattr(
+        workspaces.os.environ,
+        "get",
+        lambda chave, default=None: {"USERNAME": "flavia"}.get(chave, default),
+    )
+    monkeypatch.setattr(workspaces.subprocess, "run", _run_falso)
+
+    workspaces._restringir(alvo, 0o600)
+
+    saida = capsys.readouterr()
+    assert "Aviso" in saida.err
+    assert "Acesso negado" in saida.err
+
+
+def test_restringir_no_windows_sem_username_avisa_e_nao_chama_icacls(monkeypatch, tmp_path, capsys):
+    alvo = tmp_path / "s.json"
+    alvo.write_text("{}", encoding="utf-8")
+    chamadas: list[list[str]] = []
+
+    monkeypatch.setattr(workspaces.os, "name", "nt")
+    monkeypatch.setattr(workspaces.os.environ, "get", lambda chave, default=None: default)
+    monkeypatch.setattr(workspaces.subprocess, "run", lambda *a, **k: chamadas.append(a))
+
+    workspaces._restringir(alvo, 0o600)
+
+    assert chamadas == []
+    assert "Aviso" in capsys.readouterr().err

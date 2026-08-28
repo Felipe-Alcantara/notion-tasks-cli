@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import sysconfig
 from collections.abc import Mapping
@@ -426,12 +427,72 @@ def _garantir_pasta(pasta: Path) -> None:
 
 
 def _restringir(alvo: Path, modo: int) -> None:
-    """Restringe a permissao, ignorando sistemas que nao suportam chmod."""
+    """Restringe a permissao ao dono, avisando (nao escondendo) quem falhar.
 
+    Em POSIX, ``os.chmod`` resolve. No Windows ele **nao** aplica ACL — o
+    arquivo continua herdando o que a pasta do usuario conceder. Medido em
+    27/08/2026: ``%APPDATA%\\Roaming`` pode ter grupos com Leitura e Execucao
+    herdada (aqui, o sandbox do Codex CLI), o que deixaria o token legivel por
+    outros processos. Ali a restricao real e via ``icacls`` (`_restringir_windows`).
+    """
+
+    if os.name == "nt":
+        _restringir_windows(alvo)
+        return
     try:
         os.chmod(alvo, modo)
-    except OSError:
-        pass
+    except OSError as erro:
+        print(f"Aviso: nao foi possivel restringir a permissao de {alvo}: {erro}", file=sys.stderr)
+
+
+#: SID bem-conhecido do grupo Administradores — independe do idioma do Windows
+#: (o nome "Administradores"/"Administrators" varia, o SID nao).
+_SID_ADMINISTRADORES = "*S-1-5-32-544"
+
+
+def _restringir_windows(alvo: Path) -> None:
+    """Remove a heranca de ACL e concede acesso so ao dono, SYSTEM e Administradores.
+
+    Usa ``icacls`` via ``subprocess`` em vez de ``pywin32``, para nao adicionar
+    dependencia especifica de plataforma a um projeto que hoje nao tem nenhuma.
+    Falha vira aviso em stderr, nunca silencio: foi o ``except OSError: pass``
+    anterior que deixou este achado passar despercebido ate ser medido.
+    """
+
+    dono = os.environ.get("USERNAME") or os.environ.get("USER")
+    if not dono:
+        print(
+            f"Aviso: nao foi possivel restringir a permissao de {alvo} "
+            "(USERNAME nao definido, dono do arquivo desconhecido).",
+            file=sys.stderr,
+        )
+        return
+    comando = [
+        "icacls",
+        str(alvo),
+        "/inheritance:r",
+        "/grant:r",
+        f"{dono}:F",
+        "/grant:r",
+        "SYSTEM:F",
+        "/grant:r",
+        f"{_SID_ADMINISTRADORES}:F",
+    ]
+    try:
+        resultado = subprocess.run(comando, capture_output=True, text=True, check=False)
+    except OSError as erro:
+        print(
+            f"Aviso: nao foi possivel restringir a permissao de {alvo} "
+            f"(icacls indisponivel: {erro}).",
+            file=sys.stderr,
+        )
+        return
+    if resultado.returncode != 0:
+        detalhe = resultado.stderr.strip() or resultado.stdout.strip()
+        print(
+            f"Aviso: icacls falhou ao restringir {alvo} (codigo {resultado.returncode}): {detalhe}",
+            file=sys.stderr,
+        )
 
 
 def _normalizar_alias(alias: str) -> str:

@@ -271,6 +271,43 @@ editável para não editável e de volta — `perfis listar` devolveu exatamente
 lista nos dois modos. Ao fim, restou **uma** cópia do store no disco, fora de
 qualquer repositório git.
 
+### Validação em Windows (27/08/2026) — e um risco real encontrado
+
+A entrada acima media só Linux. Três pontos conferidos agora num Python 3.14 no
+Windows, com dados sintéticos (sem tocar no store real desta máquina):
+
+1. **`pasta_configuracao()` devolve o `%APPDATA%` de verdade** —
+   `C:\Users\...\AppData\Roaming\notion-tasks`, não o fallback `~/AppData/Roaming`.
+2. **A migração funciona** — `.notion-workspaces.json` sintético num "endereço
+   antigo" isolado, primeira chamada de `_migrar_legado` move o arquivo, imprime
+   o aviso uma vez em stderr, o antigo deixa de existir e `carregar_store` lê os
+   perfis migrados sem diferença de conteúdo.
+3. **O risco de maior severidade da task era real, e agora está medido.**
+   `os.chmod` é, como o próprio código já admitia, um no-op de fato no Windows —
+   e a ACL herdada não é equivalente a um `0600` POSIX nesta máquina: a pasta
+   `%APPDATA%\Roaming` (e, por herança, `%APPDATA%\notion-tasks\` e qualquer
+   arquivo criado dentro) concede `(RX)` — Leitura e Execução — ao grupo local
+   `CodexSandboxUsers`, que existe nesta máquina para isolar sessões do Codex CLI
+   (`CodexSandboxOffline`, `CodexSandboxOnline`). Confirmado num arquivo real
+   criado dentro da pasta (`icacls`): a herança inclui leitura de conteúdo, não
+   só listagem de diretório. Isto significa que **um processo sandboxed do Codex
+   nesta máquina pode ler o token do Notion do usuário**, e nada no código atual
+   detecta ou avisa isso — `_restringir` engole o `OSError` de propósito.
+
+   **Não ficou hipotético.** No meio desta mesma investigação, `carregar_store()`
+   disparou a migração real desta máquina (o `.notion-workspaces.json` do
+   repositório, com os tokens `felipe`/`flavia` de verdade, ainda não tinha sido
+   migrado). O arquivo real resultante em `%APPDATA%\notion-tasks\` tem a mesma
+   ACL medida acima — `CodexSandboxUsers:(I)(RX)` — confirmada com `icacls` no
+   arquivo de credenciais real, não numa cópia sintética.
+
+   Isto é específico da configuração desta máquina (o grupo é "managed" pelo
+   próprio Codex, não algo que o `notion-tasks-cli` controla), não um defeito
+   universal do Windows: um perfil sem esse grupo de sandbox teria a ACL
+   default de `%APPDATA%` restrita a dono + SYSTEM + Administradores, que já
+   seria aceitável. Mas o código não tem como saber disso, e hoje não tenta.
+   Virou task própria — não é escopo desta consertar em cima da hora.
+
 ---
 
 ## [2026-08-24] Escolher database e escolher perfil passam a gravar no mesmo lugar
@@ -311,3 +348,62 @@ módulo: `listar --status "Entrada"` → 31 linhas (antes, 400 genérico);
 `listar --area a1` numa base sem a coluna → mensagem nomeando
 `Áreas da vida` em vez de traceback.
 
+## [2026-08-25] `criar` funciona fora do database de tarefas
+
+O comando dizia aceitar qualquer `--set`, mas a primeira chamada ainda criava a
+linha pelo `TaskList` com o título fixo `Tarefa`. Em `Relatórios diários`, cuja
+coluna title é `Relatório`, a API recusava o payload antes de `Data`, `Status` e o
+corpo serem preenchidos.
+
+A descoberta do título e a omissão dos campos de tarefa ausentes ficaram no
+`notion-starter`; a CLI permaneceu borda fina. O mesmo `TaskList` agora é
+reutilizado entre a validação de status e a criação, aproveitando o cache de
+schema. Erros HTTP deixaram de virar apenas "Falha ao falar com o Notion": a
+saída inclui status e o corpo (truncado e tipado pelo cliente), que normalmente
+contém `code` e `message` acionáveis.
+
+**Validação.** 181 testes verdes e `ruff` limpo. Prova real nos perfis
+`relatorios` e `home-pessoal`: criação com `--set Data`, `--set Status` e
+`--conteudo` no primeiro; criação com `--status`/`--duracao` no segundo. As duas
+linhas temporárias foram arquivadas ao fim.
+
+---
+
+## [2026-08-28] O token deixa de confiar na ACL herdada no Windows
+
+**Continuação da entrada de 24/08 e da validação de 27/08 acima.** O achado real
+era: `_restringir` chamava `os.chmod(alvo, 0o600)` e engolia o `OSError` — mas
+`os.chmod` **não aplica ACL no Windows**, então o store de perfis continuava com
+a herança de `%APPDATA%\Roaming`. Medido nesta mesma máquina: o grupo
+`CodexSandboxUsers` tinha `(RX)` herdado, ou seja, conseguia ler o token.
+
+### O que mudou
+
+`_restringir` passa a se ramificar por `os.name`:
+
+- **POSIX**: continua `os.chmod`, sem regressão — mas a falha agora também vira
+  aviso em stderr em vez de silêncio, pelo mesmo motivo do Windows abaixo.
+- **Windows**: `_restringir_windows` chama `icacls /inheritance:r` e concede
+  acesso só ao dono (via `%USERNAME%`), `SYSTEM` e Administradores — este
+  último pelo SID bem-conhecido `*S-1-5-32-544`, não pelo nome (que muda com o
+  idioma do Windows). Sem `pywin32`: `subprocess` + `icacls` evita adicionar
+  dependência específica de plataforma a um projeto que hoje não tem nenhuma.
+
+A falha deixou de ser um `except OSError: pass` mudo nos dois sistemas — é
+exatamente o padrão que deixou o achado original passar despercebido até ser
+medido em 27/08. Falha vira `print(..., file=sys.stderr)`, sempre.
+
+### Validação
+
+Sem máquina Windows disponível nesta sessão, então o comportamento do `icacls`
+foi coberto por teste que mocka `subprocess.run` e força `os.name = "nt"` — a
+mesma técnica que `decidir_pasta_configuracao` já usa para testar o ramo Windows
+em máquina POSIX (ver comentário na função, entrada de 24/08). Três testes
+novos: comando sem herança e com os três `/grant:r` corretos; falha do `icacls`
+vira aviso em stderr; `USERNAME` ausente não chama `icacls` e avisa em vez de
+arriscar um comando sem dono. 184 testes verdes (181 + 3), suíte completa.
+
+**Não medido**: `icacls` de verdade numa máquina Windows real, confirmando com
+`icacls <arquivo>` que o grupo de sandbox perdeu o acesso. Fica como o próximo
+passo natural — mockar prova a chamada certa, não o efeito real na ACL do
+sistema operacional. Task original permanece aberta até essa medição.
