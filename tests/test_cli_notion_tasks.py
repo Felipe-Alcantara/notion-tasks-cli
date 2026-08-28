@@ -421,11 +421,12 @@ def test_mapear_resume_workspace():
     assert saida["dados"]["total_databases"] == 1
 
 
-def test_escolher_database_grava_env_file(tmp_path: Path):
+def test_escolher_database_sem_perfil_grava_env_file(tmp_path: Path):
     env_file = tmp_path / ".env"
     salvar_database_env = cli._salvar_database_env
     with (
         mock.patch.object(cli, "RAIZ", tmp_path),
+        mock.patch.object(cli.perfis_workspace, "ARQUIVO_PADRAO", tmp_path / "perfis.json"),
         mock.patch.object(
             cli,
             "_salvar_database_env",
@@ -436,6 +437,34 @@ def test_escolher_database_grava_env_file(tmp_path: Path):
     assert codigo == 0
     assert env_file.read_text(encoding="utf-8") == "NOTION_DATABASE_ID=db_novo\n"
     assert saida["dados"]["database_id"] == "db_novo"
+    assert saida["dados"]["perfil"] == ""
+
+
+def test_escolher_database_grava_no_perfil_ativo(tmp_path: Path, monkeypatch):
+    """Com perfil ativo, o database vai para o perfil — quem vence a resolução.
+
+    Gravando só no ``.env``, ``perfis mostrar`` continuava com database vazio e o
+    comando seguinte falhava com "NOTION_DATABASE_ID não configurado" logo depois
+    de um ``escolher-database`` que respondeu sucesso.
+    """
+
+    arquivo = tmp_path / "perfis.json"
+    monkeypatch.delenv("NOTION_PROFILE", raising=False)
+    cli.perfis_workspace.adicionar_perfil(
+        alias="relatorios",
+        token="ntn_" + "a" * 20,
+        ativar=True,
+        caminho=arquivo,
+    )
+    with mock.patch.object(cli.perfis_workspace, "ARQUIVO_PADRAO", arquivo):
+        codigo, saida = _executar(["--json", "escolher-database", "db_novo"])
+        perfil = cli.perfis_workspace.resolver_perfil("relatorios", arquivo)
+
+    assert codigo == 0
+    assert saida["dados"]["perfil"] == "relatorios"
+    assert saida["dados"]["salvo_em"] == str(arquivo)
+    assert perfil is not None and perfil.database_id == "db_novo"
+    assert not (tmp_path / ".env").exists()
 
 
 def test_perfil_global_aplica_workspace_antes_do_comando():
@@ -1506,3 +1535,70 @@ def test_garantir_coluna_tipo_invalido():
         ["--json", "garantir-coluna", "db1", "Idioma", "tipo-que-nao-existe"], client=cliente
     )
     assert codigo != 0
+
+
+# -- Mensagem de erro do Notion --------------------------------------------
+#
+# Todo erro que não fosse 404 virava "Falha ao falar com o Notion." e o corpo do
+# 400 — o único lugar que nomeia a propriedade recusada — era descartado.
+
+
+class ClienteQueRecusa(FakeClient):
+    """Cliente que responde como a API real quando a propriedade está errada."""
+
+    def __init__(self, status: int, corpo: str) -> None:
+        super().__init__()
+        self._status = status
+        self._corpo = corpo
+
+    def buscar(self, **kwargs):
+        from notion_starter import NotionHTTPError
+
+        raise NotionHTTPError(self._status, self._corpo)
+
+
+def test_erro_400_do_notion_chega_com_a_mensagem_da_api():
+    corpo = (
+        '{"object": "error", "status": 400, "code": "validation_error", '
+        '"message": "Etapa is expected to be select."}'
+    )
+    codigo, saida = _executar(
+        ["--json", "buscar", "x"], client=ClienteQueRecusa(400, corpo)
+    )
+    assert codigo == 1
+    mensagem = saida["erro"]["mensagem"]
+    assert "HTTP 400" in mensagem
+    assert "Etapa is expected to be select." in mensagem
+    assert "validation_error" in mensagem
+
+
+def test_erro_404_continua_com_a_mensagem_curta():
+    codigo, saida = _executar(
+        ["--json", "buscar", "x"], client=ClienteQueRecusa(404, "não encontrado")
+    )
+    assert codigo == 1
+    assert saida["erro"]["mensagem"] == "Recurso não encontrado."
+
+
+def test_erro_sem_json_no_corpo_devolve_o_texto_cru():
+    codigo, saida = _executar(
+        ["--json", "buscar", "x"], client=ClienteQueRecusa(502, "<html>bad gateway</html>")
+    )
+    assert codigo == 1
+    assert "bad gateway" in saida["erro"]["mensagem"]
+
+
+def test_coluna_inexistente_vira_erro_de_uso_com_caminho():
+    """Schema errado não pode virar traceback: é erro de uso, com exit 2."""
+
+    from notion_starter import NotionSchemaError
+
+    class TaskListSemAreas(FakeTaskList):
+        def listar(self, *args, **kwargs):
+            raise NotionSchemaError(faltando=["Áreas da vida"])
+
+    codigo, saida = _executar(["--json", "listar", "--area", "a1"], fake=TaskListSemAreas())
+    assert codigo == 2
+    mensagem = saida["erro"]["mensagem"]
+    assert "Áreas da vida" in mensagem
+    assert "schema <database_id>" in mensagem

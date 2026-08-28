@@ -310,6 +310,44 @@ Windows, com dados sintéticos (sem tocar no store real desta máquina):
 
 ---
 
+## [2026-08-24] Escolher database e escolher perfil passam a gravar no mesmo lugar
+
+**Contexto.** O caminho documentado para uma IA começar a operar um workspace —
+`escolher-database <id>` e depois `criar` — não funcionava com perfil ativo.
+Medido: `escolher-database` respondia sucesso, mas gravava em um `.env` **dentro
+de `site-packages/`**; o perfil ativo continuava com `database_id` vazio e, como
+o perfil vence o `.env` na resolução, o `criar` seguinte falhava com
+"NOTION_DATABASE_ID não configurado". Dois comandos sobre a mesma configuração
+escrevendo em arquivos diferentes — e o que o usuário lê (`perfis mostrar`) não
+era o que o comando tinha gravado.
+
+`cmd_escolher_database` agora resolve o perfil (o de `--perfil`, ou o ativo) e
+grava nele, via `workspaces.definir_database`. Sem nenhum perfil, o `.env`
+continua valendo — é o modo sem perfil, não um fallback silencioso. A resposta
+passa a dizer **onde** gravou e **em qual perfil**.
+
+### O 400 do Notion parou de ser engolido
+
+Todo erro que não fosse 404 virava `"Falha ao falar com o Notion."`. O corpo do
+400 — o único lugar que nomeia a propriedade recusada, ex.: *"Etapa is expected
+to be select"* — era descartado. Quem lê a saída (pessoa ou modelo) ficava sem o
+dado que resolveria o problema, e a reação natural era repetir a tentativa.
+
+`_mensagem_erro_notion` mantém 404 curto (é diagnóstico de compartilhamento, não
+de payload) e devolve `HTTP <status>: <message> [<code>]` para o resto,
+com o corpo cru de reserva quando não é JSON.
+
+`NotionSchemaError`, que a biblioteca passou a levantar antes de chamar a API,
+é tratado como **erro de uso** (exit 2) e ganha o caminho de saída na mensagem:
+`rode 'schema <database_id>' para ver as colunas reais`.
+
+### Validação
+
+182 testes verdes e `ruff` limpo. Contra o workspace real, com o código do
+módulo: `listar --status "Entrada"` → 31 linhas (antes, 400 genérico);
+`listar --area a1` numa base sem a coluna → mensagem nomeando
+`Áreas da vida` em vez de traceback.
+
 ## [2026-08-25] `criar` funciona fora do database de tarefas
 
 O comando dizia aceitar qualquer `--set`, mas a primeira chamada ainda criava a
