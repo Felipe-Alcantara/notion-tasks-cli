@@ -328,3 +328,44 @@ contém `code` e `message` acionáveis.
 `relatorios` e `home-pessoal`: criação com `--set Data`, `--set Status` e
 `--conteudo` no primeiro; criação com `--status`/`--duracao` no segundo. As duas
 linhas temporárias foram arquivadas ao fim.
+
+---
+
+## [2026-08-28] O token deixa de confiar na ACL herdada no Windows
+
+**Continuação da entrada de 24/08 e da validação de 27/08 acima.** O achado real
+era: `_restringir` chamava `os.chmod(alvo, 0o600)` e engolia o `OSError` — mas
+`os.chmod` **não aplica ACL no Windows**, então o store de perfis continuava com
+a herança de `%APPDATA%\Roaming`. Medido nesta mesma máquina: o grupo
+`CodexSandboxUsers` tinha `(RX)` herdado, ou seja, conseguia ler o token.
+
+### O que mudou
+
+`_restringir` passa a se ramificar por `os.name`:
+
+- **POSIX**: continua `os.chmod`, sem regressão — mas a falha agora também vira
+  aviso em stderr em vez de silêncio, pelo mesmo motivo do Windows abaixo.
+- **Windows**: `_restringir_windows` chama `icacls /inheritance:r` e concede
+  acesso só ao dono (via `%USERNAME%`), `SYSTEM` e Administradores — este
+  último pelo SID bem-conhecido `*S-1-5-32-544`, não pelo nome (que muda com o
+  idioma do Windows). Sem `pywin32`: `subprocess` + `icacls` evita adicionar
+  dependência específica de plataforma a um projeto que hoje não tem nenhuma.
+
+A falha deixou de ser um `except OSError: pass` mudo nos dois sistemas — é
+exatamente o padrão que deixou o achado original passar despercebido até ser
+medido em 27/08. Falha vira `print(..., file=sys.stderr)`, sempre.
+
+### Validação
+
+Sem máquina Windows disponível nesta sessão, então o comportamento do `icacls`
+foi coberto por teste que mocka `subprocess.run` e força `os.name = "nt"` — a
+mesma técnica que `decidir_pasta_configuracao` já usa para testar o ramo Windows
+em máquina POSIX (ver comentário na função, entrada de 24/08). Três testes
+novos: comando sem herança e com os três `/grant:r` corretos; falha do `icacls`
+vira aviso em stderr; `USERNAME` ausente não chama `icacls` e avisa em vez de
+arriscar um comando sem dono. 184 testes verdes (181 + 3), suíte completa.
+
+**Não medido**: `icacls` de verdade numa máquina Windows real, confirmando com
+`icacls <arquivo>` que o grupo de sandbox perdeu o acesso. Fica como o próximo
+passo natural — mockar prova a chamada certa, não o efeito real na ACL do
+sistema operacional. Task original permanece aberta até essa medição.
