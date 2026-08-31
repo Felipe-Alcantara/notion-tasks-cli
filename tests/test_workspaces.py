@@ -136,14 +136,15 @@ def test_endereco_do_store_nao_depende_de_onde_o_pacote_esta_instalado():
     """
 
     codigo = "from core import workspaces as w;print(w.ARQUIVO_PADRAO);print(w.caminho_padrao())"
-    saida = subprocess.run(
+    linhas = subprocess.run(
         [sys.executable, "-c", codigo],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.split()
-    resolvido_no_import, canonico = Path(saida[0]), Path(saida[1])
+    ).stdout.splitlines()
+    assert len(linhas) == 2
+    resolvido_no_import, canonico = map(Path, linhas)
 
     assert resolvido_no_import == canonico
     pasta_do_pacote = Path(workspaces.__file__).resolve().parents[1]

@@ -407,3 +407,40 @@ arriscar um comando sem dono. 184 testes verdes (181 + 3), suíte completa.
 `icacls <arquivo>` que o grupo de sandbox perdeu o acesso. Fica como o próximo
 passo natural — mockar prova a chamada certa, não o efeito real na ACL do
 sistema operacional. Task original permanece aberta até essa medição.
+
+---
+
+## [2026-08-31] A ACL do store foi confirmada no Windows real
+
+**Continuação direta da entrada de 28/08.** A máquina Windows desta sessão
+permitiu fechar a lacuna que mantinha a task de segurança aberta: medir o efeito
+do `icacls`, e não apenas a montagem do comando em um mock.
+
+### Medição real
+
+Foi criado um arquivo sintético temporário dentro de `%APPDATA%\notion-tasks\`,
+sem ler nem alterar o store de credenciais. A ACL foi capturada antes e depois
+de chamar `_restringir`:
+
+- **Antes:** `CodexSandboxUsers:(I)(RX)`, além de SYSTEM, Administradores e o
+  usuário dono com herança `(I)`.
+- **Depois:** somente Administradores, SYSTEM e o usuário dono, todos com
+  `(F)` direto; `CodexSandboxUsers` e a herança desapareceram.
+
+O arquivo temporário foi removido ao fim da medição. Portanto, o critério de
+aceite desta task foi confirmado no Windows real: um novo arquivo do store não
+mantém o acesso herdado do grupo de sandbox.
+
+### Ajuste de portabilidade encontrado no gate
+
+O primeiro `python -m pytest` encontrou uma falha no teste
+`test_endereco_do_store_nao_depende_de_onde_o_pacote_esta_instalado`: o teste
+usava `.split()` para ler caminhos impressos por um subprocesso, quebrando o
+caminho Windows que contém espaços. O teste passou a ler as duas linhas com
+`.splitlines()`, preservando o comportamento medido.
+
+### Validação final e estado
+
+`python -m pytest`: **188 passed, 2 skipped**. `ruff check .`: **All checks
+passed**. A correção da ACL, o aviso visível em caso de falha e a validação
+POSIX existente permanecem cobertos; esta task pode ser marcada como concluída.
