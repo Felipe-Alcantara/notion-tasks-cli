@@ -849,16 +849,37 @@ def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFac
             "previa": previa,
         }
 
+    # "Resumo" e "O que fiz" nasceram para o schema rico (Apêndice B) que nem
+    # todo workspace tem — muitos databases de relatório têm só "Tarefa" e
+    # "Data", com o conteúdo indo inteiro no corpo (svc_historico.corpo_markdown
+    # já inclui os dois). Escrever numa coluna que não existe derruba a
+    # publicação inteira com HTTP 400 ("X is not a property that exists"), então
+    # cada propriedade "extra" só entra se a coluna existir de fato no
+    # database — checado uma vez, contra o schema real.
+    colunas_existentes = {
+        coluna.nome
+        for coluna in starter_schema.descrever_database(
+            client_factory().get_database(database_id)
+        ).colunas
+    }
+
     area = _normalizar_texto(args.area)
     relatorios = []
     for dia in dias:
-        propriedades: dict[str, Any] = {
-            "Resumo": starter_properties.rich_text(dia.resumo()),
-            "O que fiz": starter_properties.rich_text(dia.o_que_fiz()),
-        }
+        propriedades: dict[str, Any] = {}
+        if "Resumo" in colunas_existentes:
+            propriedades["Resumo"] = starter_properties.rich_text(dia.resumo())
+        if "O que fiz" in colunas_existentes:
+            propriedades["O que fiz"] = starter_properties.rich_text(dia.o_que_fiz())
         if area:
+            if "Área" not in colunas_existentes:
+                raise CLIError('--area exige uma coluna "Área" no database — ela não existe aí.')
             propriedades["Área"] = starter_properties.select(area)
         if args.status:
+            if "Status" not in colunas_existentes:
+                raise CLIError(
+                    '--status exige uma coluna "Status" no database — ela não existe aí.'
+                )
             propriedades["Status"] = starter_properties.status(args.status)
         relatorios.append(
             svc_relatorios.RelatorioDiario(

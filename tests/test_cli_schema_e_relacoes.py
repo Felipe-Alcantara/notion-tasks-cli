@@ -452,3 +452,125 @@ def test_sem_repositorio_nenhum_o_erro_ensina_as_duas_saidas():
     assert codigo == 2
     assert "--repo" in saida["erro"]["mensagem"]
     assert "--descobrir" in saida["erro"]["mensagem"]
+
+
+class _DiaFalso:
+    """Substituto mínimo de DiaConsolidado para os testes de propriedades."""
+
+    def __init__(self, data: str) -> None:
+        self.data = data
+        self.total_commits = 1
+        self.repositorios = ("Projeto X",)
+
+    def resumo(self) -> str:
+        return "Projeto X: 1 commit."
+
+    def o_que_fiz(self) -> str:
+        return "- 09:00 abc1234 feat: algo"
+
+
+class _ClienteSchemaMinimo(ClienteFalso):
+    """Database só com Tarefa/Data — o schema real de muitos workspaces."""
+
+    def get_database(self, database_id: str) -> dict[str, Any]:
+        return {
+            "id": DATABASE,
+            "title": [{"plain_text": "Relatório"}],
+            "properties": {
+                "Tarefa": {"type": "title"},
+                "Data": {"type": "date"},
+            },
+        }
+
+
+def test_relatorio_nao_escreve_coluna_resumo_se_ela_nao_existe(monkeypatch):
+    """Regressão: 'Resumo'/'O que fiz' eram enviadas sem checar o schema e
+
+    derrubavam a publicação inteira com HTTP 400 num database que só tem
+    Tarefa/Data (o schema real de vários workspaces, sem o Apêndice B rico).
+    """
+
+    monkeypatch.setattr(
+        cli.svc_historico, "consolidar_dias", lambda *a, **k: [_DiaFalso("2026-09-04")]
+    )
+    monkeypatch.setattr(cli.svc_historico, "corpo_markdown", lambda dia, **k: "corpo")
+
+    capturados: list[Any] = []
+
+    class _Resultado:
+        relatorios: tuple = ()
+        criadas = 0
+        complementadas = 0
+
+    def _publicar(database_id, relatorios, *, cliente):
+        capturados.extend(relatorios)
+        return _Resultado()
+
+    monkeypatch.setattr(cli.svc_relatorios, "publicar_relatorios", _publicar)
+
+    codigo, saida = cli.executar(
+        ["--json", "relatorios-do-git", "--database", "db", "--repo", "X=."],
+        client_factory=lambda: _ClienteSchemaMinimo(),
+    )
+
+    assert codigo == 0, saida
+    assert len(capturados) == 1
+    assert capturados[0].propriedades == {}
+
+
+def test_relatorio_escreve_resumo_quando_a_coluna_existe(monkeypatch):
+    """No schema rico (com Resumo/O que fiz), as propriedades continuam indo."""
+
+    monkeypatch.setattr(
+        cli.svc_historico, "consolidar_dias", lambda *a, **k: [_DiaFalso("2026-09-04")]
+    )
+    monkeypatch.setattr(cli.svc_historico, "corpo_markdown", lambda dia, **k: "corpo")
+
+    class _ClienteSchemaRico(ClienteFalso):
+        def get_database(self, database_id: str) -> dict[str, Any]:
+            return {
+                "id": DATABASE,
+                "title": [{"plain_text": "Relatório"}],
+                "properties": {
+                    "Tarefa": {"type": "title"},
+                    "Data": {"type": "date"},
+                    "Resumo": {"type": "rich_text"},
+                    "O que fiz": {"type": "rich_text"},
+                },
+            }
+
+    capturados: list[Any] = []
+
+    class _Resultado:
+        relatorios: tuple = ()
+        criadas = 0
+        complementadas = 0
+
+    def _publicar(database_id, relatorios, *, cliente):
+        capturados.extend(relatorios)
+        return _Resultado()
+
+    monkeypatch.setattr(cli.svc_relatorios, "publicar_relatorios", _publicar)
+
+    codigo, saida = cli.executar(
+        ["--json", "relatorios-do-git", "--database", "db", "--repo", "X=."],
+        client_factory=lambda: _ClienteSchemaRico(),
+    )
+
+    assert codigo == 0, saida
+    assert set(capturados[0].propriedades) == {"Resumo", "O que fiz"}
+
+
+def test_relatorio_area_sem_coluna_da_erro_claro(monkeypatch):
+    monkeypatch.setattr(
+        cli.svc_historico, "consolidar_dias", lambda *a, **k: [_DiaFalso("2026-09-04")]
+    )
+    monkeypatch.setattr(cli.svc_historico, "corpo_markdown", lambda dia, **k: "corpo")
+
+    codigo, saida = cli.executar(
+        ["--json", "relatorios-do-git", "--database", "db", "--repo", "X=.", "--area", "Backend"],
+        client_factory=lambda: _ClienteSchemaMinimo(),
+    )
+
+    assert codigo != 0
+    assert "Área" in saida["erro"]["mensagem"]
