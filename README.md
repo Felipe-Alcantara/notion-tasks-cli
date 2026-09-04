@@ -5,6 +5,7 @@
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![CLI para IA](https://img.shields.io/badge/CLI-para%20IA-6C63FF?style=for-the-badge&logo=gnubash&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/Licen%C3%A7a-MIT-green?style=for-the-badge)
+[![PyPI](https://img.shields.io/pypi/v/notion-automacoes?style=for-the-badge&label=PyPI)](https://pypi.org/project/notion-automacoes/)
 
 **A CLI única para pessoas e IAs operarem tarefas, páginas, blocos e databases do Notion.**
 
@@ -98,10 +99,11 @@ pipx install "notion-automacoes[app]"
 # alternativa: uv tool install "notion-automacoes[app]"
 ```
 
-O release técnico candidato `notion-automacoes==0.3.0` está preparado. A publicação no PyPI ainda exige
-confirmação de nome/ownership/metadados legais. A instalação básica, sem a
-interface gráfica, é `pipx install notion-automacoes`; o extra `app` adiciona
-Django, MCP e a SPA React já compilada no wheel.
+O pacote público [`notion-automacoes==0.3.0`](https://pypi.org/project/notion-automacoes/)
+é a fachada distribuída do repositório. A instalação básica, sem a interface
+gráfica, é `pipx install notion-automacoes`; o extra `app` adiciona Django, MCP
+e a SPA React já compilada no wheel. Não é necessário clonar Git nem instalar
+Node/npm para uso distribuído.
 
 Primeiros comandos, sem token:
 
@@ -126,6 +128,18 @@ O alias histórico permanece disponível:
 notion-tasks listar
 ```
 
+Para conferir a instalação sem credenciais:
+
+```bash
+notion-automacoes --version
+notion-automacoes --help
+notion-automacoes doctor
+notion-automacoes auth listar
+```
+
+Consulte o [contrato de distribuição do hub](https://github.com/Felipe-Alcantara/Automa-es-do-Notion/blob/main/docs/DISTRIBUICAO.md)
+para a matriz de release, a política de perfis e os limites do primeiro release.
+
 Prefere um passo a passo guiado? Clone o repositório e use o menu:
 
 ```bash
@@ -138,7 +152,7 @@ python start_app.py
 ```bash
 # Tarefas
 notion-tasks listar
-notion-tasks criar "Revisar proposta" --status "Em andamento"
+notion-tasks criar "Revisar proposta" --status "Entrada"
 notion-tasks editar <id> --nome "Novo título"
 notion-tasks mover <id> "Concluído"
 notion-tasks concluir <id> "Concluído"
@@ -262,7 +276,7 @@ Este projeto está sob a licença MIT — veja [`LICENSE`](LICENSE).
 
 ## 👤 Autor
 
-**Felipe Martin**
+**Felipe Alcantara**
 
 - GitHub: [@Felipe-Alcantara](https://github.com/Felipe-Alcantara)
 - Repositório: [notion-tasks-cli](https://github.com/Felipe-Alcantara/notion-tasks-cli)

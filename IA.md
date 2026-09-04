@@ -16,16 +16,16 @@
 
 Última atualização: [2026-09-04]
 
-- Fase: fachada distribuída `notion-automacoes` preparada, com alias histórico
-  `notion-tasks`, saída JSON estável e perfis persistentes.
-- Qualidade: 197 testes verdes e `ruff` limpo; CI cobre Python 3.10–3.13.
+- Fase: fachada distribuída `notion-automacoes==0.3.0` publicada, com alias
+  histórico `notion-tasks`, saída JSON estável e perfis persistentes.
+- Qualidade: 198 testes verdes e `ruff` limpo; CI cobre Python 3.10–3.13.
 - Documentação: README alinhado ao Felixo System Design e contrato de qualidade
   centralizado em `QUALIDADE.md`.
-- Próximos passos abertos: confirmação do contrato de publicação no PyPI, escrita
-  multi-fonte e paginação de saídas grandes.
-- Risco conhecido: a publicação não deve ocorrer antes da confirmação de nome,
-  ownership e metadados legais; ambientes consumidores devem fixar sua própria
-  resolução quando precisarem de builds reproduzíveis.
+- Próximos passos abertos: escrita multi-fonte e paginação de saídas grandes,
+  como contribuições isoladas.
+- Risco conhecido: ambientes consumidores devem fixar sua própria resolução
+  quando precisarem de builds reproduzíveis; o pacote público usa faixas
+  compatíveis para evitar conflitos no ambiente consumidor.
 
 ---
 
@@ -461,7 +461,16 @@ insere mais o diretório `server/` do app no `sys.path`, pois isso fazia o pacot
 legado `core` do app sombrear o `core` da CLI. O MCP é iniciado em processo
 separado pela fachada para manter as duas árvores de importação isoladas.
 
-**Validação:** `ruff check .` limpo, **197 testes verdes**, `twine check` aprovado
+**Validação:** `ruff check .` limpo, **198 testes verdes**, `twine check` aprovado
 para wheel e sdist, `--version`/`--help`/`doctor`/`auth listar` exercitados em
 ambiente limpo e o alias `notion-tasks` preservado. A publicação efetiva não foi
 executada até confirmar nome, ownership, metadados legais e Trusted Publishing.
+
+## [2026-09-04] Documentação e estado público atualizados
+
+O README, `AGENTS.md`, `CONTRIBUTING.md` e `QUALIDADE.md` agora tratam
+`notion-automacoes==0.3.0` como pacote público, mantendo `notion-tasks` como
+alias de compatibilidade. O guia separa instalação distribuída de desenvolvimento,
+documenta `doctor`/`auth` e aponta para as evidências de release. A titularidade
+legal registrada no pacote é `Felipe Alcantara`; a publicação e o Trusted
+Publishing deixam de ser descritos como pendência.

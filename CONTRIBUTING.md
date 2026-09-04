@@ -10,6 +10,11 @@ JSON são bem-vindos.
 > Contribuições devem preservar os contratos existentes (envelope JSON
 > `{ok,dados}` / `{ok,erro}`), a documentação viva e o gate de qualidade abaixo.
 
+O pacote público é [`notion-automacoes`](https://pypi.org/project/notion-automacoes/);
+o nome do repositório continua `notion-tasks-cli` por compatibilidade histórica.
+Mudanças na fachada precisam manter o alias `notion-tasks` ou registrar uma
+mudança incompatível no `README`, `--help` e `IA.md`.
+
 ---
 
 ## 🚀 Como Contribuir
@@ -32,7 +37,7 @@ python start_app.py          # menu: Instalar / Configurar / Status / Usar
 
 # Ou manualmente:
 python -m pip install -e ".[dev]"
-ruff check .
+python -m ruff check .
 python -m pytest
 ```
 

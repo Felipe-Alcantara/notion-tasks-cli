@@ -40,9 +40,15 @@ resolução no ambiente consumidor.
 
 ## Distribuição
 
-O pacote candidato `notion-automacoes` (`0.3.0`) expõe a fachada unificada e
+O pacote público `notion-automacoes` (`0.3.0`) expõe a fachada unificada e
 mantém o executável histórico `notion-tasks`. A dependência do `notion-starter` é
 uma faixa versionada (`>=0.3.0,<0.4.0`), sem URL Git em `Requires-Dist`; o extra
-`app` adiciona o app Django/MCP. Wheel e sdist são validados por `twine check`.
-Publicação no PyPI e Trusted Publishing aguardam a confirmação do contrato legal
-e do ownership do pacote.
+`app` adiciona o app Django/MCP. Wheel e sdist são validados por `twine check` e
+publicados no [PyPI](https://pypi.org/project/notion-automacoes/) por Trusted
+Publishing. A titularidade legal declarada no pacote é `Felipe Alcantara`.
+
+## Documentação
+
+Mudanças em subcomandos, entry points, envelope JSON, instalação ou perfis exigem
+atualização do `README.md`, do `--help` e de `IA.md` no mesmo passo. Exemplos
+usam placeholders e nunca registram tokens, IDs reais ou caminhos privados.

@@ -2,6 +2,10 @@
 
 CLI do Notion **feito para IAs** ("MCP via CLI"), módulo do ecossistema [Automações do Notion](https://github.com/Felipe-Alcantara/Automa-es-do-Notion) — o hub tem o roteamento completo entre módulos.
 
+O repositório publica a distribuição [`notion-automacoes`](https://pypi.org/project/notion-automacoes/),
+atualmente em `0.3.0`; `notion-tasks` é o alias de compatibilidade. O uso sem
+checkout começa por `pipx install "notion-automacoes[app]"`.
+
 ## Arquitetura (fronteiras sagradas)
 
 ```
@@ -36,3 +40,7 @@ CLI.
 ```bash
 python -m pytest
 ```
+
+Ao alterar subcomandos, entry points, instalação, perfis ou o envelope JSON,
+atualize `README.md`, o `--help`, `QUALIDADE.md` e `IA.md`. O `README` do módulo
+deve continuar distinguindo uso público de desenvolvimento local.
