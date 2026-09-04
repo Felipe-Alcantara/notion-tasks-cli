@@ -1,4 +1,4 @@
-"""CLI para IA operar tarefas do Notion via ``server/services``.
+"""CLI para IA operar tarefas do Notion via services compartilhados.
 
 Esta borda valida entradas, escolhe formato de saída e delega a regra para os
 services compartilhados com API/MCP. Não monta payload cru do Notion.
@@ -15,10 +15,7 @@ from pathlib import Path
 from typing import Any
 
 RAIZ = Path(__file__).resolve().parents[1]
-SERVER_DIR = RAIZ / "server"
 LOCAL_STARTER = RAIZ.parent / "notion-starter" / "src"
-if str(SERVER_DIR) not in sys.path:
-    sys.path.insert(0, str(SERVER_DIR))
 if LOCAL_STARTER.exists() and str(LOCAL_STARTER) not in sys.path:
     sys.path.insert(0, str(LOCAL_STARTER))
 

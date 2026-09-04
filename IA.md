@@ -14,17 +14,18 @@
 
 ## 📊 ESTADO ATUAL (RESUMO VIVO)
 
-Última atualização: [2026-07-18]
+Última atualização: [2026-09-04]
 
-- Fase: CLI funcional e instalável, com saída JSON estável e perfis para múltiplos
-  workspaces.
-- Qualidade: 127 testes verdes e `ruff` limpo; CI cobre Python 3.10–3.13.
+- Fase: fachada distribuída `notion-automacoes` preparada, com alias histórico
+  `notion-tasks`, saída JSON estável e perfis persistentes.
+- Qualidade: 197 testes verdes e `ruff` limpo; CI cobre Python 3.10–3.13.
 - Documentação: README alinhado ao Felixo System Design e contrato de qualidade
   centralizado em `QUALIDADE.md`.
-- Próximos passos abertos: escrita multi-fonte, paginação de saídas grandes e
-  melhorias de distribuição.
-- Risco conhecido: ambientes consumidores devem fixar sua própria resolução de
-  dependências quando precisarem de builds reproduzíveis.
+- Próximos passos abertos: confirmação do contrato de publicação no PyPI, escrita
+  multi-fonte e paginação de saídas grandes.
+- Risco conhecido: a publicação não deve ocorrer antes da confirmação de nome,
+  ownership e metadados legais; ambientes consumidores devem fixar sua própria
+  resolução quando precisarem de builds reproduzíveis.
 
 ---
 
@@ -33,9 +34,9 @@
 [2026-07-02] `notion-tasks-cli` é a CLI do ecossistema para pessoas e IAs
 ("MCP via CLI"): tarefas (listar/criar/editar/mover/concluir), conteúdo
 (ler/escrever/editar blocos), busca, mapeamento do workspace, clonagem,
-exportação DOCX e sincronização de repositórios GitHub. Instalável via pip
-(`pip install git+https://github.com/Felipe-Alcantara/notion-tasks-cli.git`),
-expõe o comando `notion-tasks` com envelope JSON estável para automação.
+exportação DOCX e sincronização de repositórios GitHub. Expõe o comando
+`notion-tasks` com envelope JSON estável para automação e, desde a preparação da
+distribuição, também fornece a fachada `notion-automacoes`.
 
 ---
 
@@ -60,7 +61,7 @@ expõe o comando `notion-tasks` com envelope JSON estável para automação.
 
 ## 🛠️ STACK & DEPENDÊNCIAS
 
-- Python 3.10+ (CI: 3.10–3.13). Runtime: `notion-starter` (dependência git direta).
+- Python 3.10+ (CI: 3.10–3.13). Runtime: `notion-starter>=0.3.0,<0.4.0`.
 - Dev: `pytest`, `responses`, `ruff`. Menu: `questionary` + `rich` (instaladas pelo
   próprio menu quando faltam).
 
@@ -444,3 +445,23 @@ caminho Windows que contém espaços. O teste passou a ler as duas linhas com
 `python -m pytest`: **188 passed, 2 skipped**. `ruff check .`: **All checks
 passed**. A correção da ACL, o aviso visível em caso de falha e a validação
 POSIX existente permanecem cobertos; esta task pode ser marcada como concluída.
+
+## [2026-09-04] Fachada única e pacote instalável sem checkout
+
+O pacote público candidato passou a se chamar tecnicamente `notion-automacoes`
+na versão `0.3.0`. `cli/unificada.py` é uma borda fina: expõe `tasks`/`tarefas`,
+`auth`/`perfis`, `doctor`, `app start`, `mcp start` e `update`/`atualizar`,
+delegando a implementação existente de `notion-tasks`, perfis, launcher e MCP.
+Os dois entry points (`notion-automacoes` e `notion-tasks`) convivem no mesmo
+wheel, e `notion-starter` agora é resolvido por faixa versionada, sem
+`Requires-Dist` apontando para Git.
+
+Durante a validação foi corrigido um risco de instalação conjunta: o CLI não
+insere mais o diretório `server/` do app no `sys.path`, pois isso fazia o pacote
+legado `core` do app sombrear o `core` da CLI. O MCP é iniciado em processo
+separado pela fachada para manter as duas árvores de importação isoladas.
+
+**Validação:** `ruff check .` limpo, **197 testes verdes**, `twine check` aprovado
+para wheel e sdist, `--version`/`--help`/`doctor`/`auth listar` exercitados em
+ambiente limpo e o alias `notion-tasks` preservado. A publicação efetiva não foi
+executada até confirmar nome, ownership, metadados legais e Trusted Publishing.

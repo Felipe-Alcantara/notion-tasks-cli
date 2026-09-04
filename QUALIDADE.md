@@ -37,3 +37,12 @@ conflitos com bibliotecas já usadas pela pessoa.
 A compatibilidade é verificada continuamente pela matriz da CI em Python
 3.10–3.13. Quem precisar de um ambiente totalmente reproduzível deve fixar a
 resolução no ambiente consumidor.
+
+## Distribuição
+
+O pacote candidato `notion-automacoes` (`0.3.0`) expõe a fachada unificada e
+mantém o executável histórico `notion-tasks`. A dependência do `notion-starter` é
+uma faixa versionada (`>=0.3.0,<0.4.0`), sem URL Git em `Requires-Dist`; o extra
+`app` adiciona o app Django/MCP. Wheel e sdist são validados por `twine check`.
+Publicação no PyPI e Trusted Publishing aguardam a confirmação do contrato legal
+e do ownership do pacote.

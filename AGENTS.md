@@ -13,7 +13,8 @@ core/config.py        → configuração (.env, token) — imutável, nunca vaza
 
 - A borda (`cli/`) **não monta payload cru do Notion** nem contém regra de negócio.
 - `services` não conhece argparse nem HTTP de borda.
-- A base Notion vem da lib [notion-starter](https://github.com/Felipe-Alcantara/notion-starter) (dependência via git).
+- A base Notion vem da lib [notion-starter](https://github.com/Felipe-Alcantara/notion-starter),
+  resolvida por faixa de versão no PyPI na distribuição pública.
 
 ## Camada compartilhada
 

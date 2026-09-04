@@ -6,7 +6,7 @@
 ![CLI para IA](https://img.shields.io/badge/CLI-para%20IA-6C63FF?style=for-the-badge&logo=gnubash&logoColor=white)
 ![Licença MIT](https://img.shields.io/badge/Licen%C3%A7a-MIT-green?style=for-the-badge)
 
-**Um “MCP via CLI” para pessoas e IAs operarem tarefas, páginas, blocos e databases do Notion.**
+**A CLI única para pessoas e IAs operarem tarefas, páginas, blocos e databases do Notion.**
 
 [📖 Sobre](#-sobre-o-projeto) • [🚀 Funcionalidades](#-funcionalidades) • [🎯 Como usar](#-como-usar) • [✅ Qualidade](#-qualidade)
 
@@ -55,6 +55,7 @@ notion-tasks-cli/
 │
 ├── 📁 cli/                      # Parse de argumentos e saída pública
 │   ├── __main__.py              # Execução com python -m cli
+│   ├── unificada.py             # Entrada distribuída notion-automacoes
 │   └── notion_tasks.py          # Comando notion-tasks e guia --help
 ├── 📁 core/                     # Configuração e perfis locais
 ├── 📁 integrations/             # Notion local e shims de adaptadores
@@ -62,7 +63,7 @@ notion-tasks-cli/
 ├── 📁 tests/                    # Suíte automatizada sem rede
 ├── .github/workflows/ci.yml     # Gate em Python 3.10–3.13
 ├── start_app.py                 # Menu interativo de entrada
-├── pyproject.toml               # Pacote e entry point notion-tasks
+├── pyproject.toml               # Pacote e entry points públicos
 ├── QUALIDADE.md                 # Contrato de qualidade do módulo
 ├── README.md                    # Este arquivo
 └── LICENSE                      # Licença MIT
@@ -92,8 +93,37 @@ Notion.
 ### Instalação
 
 ```bash
-# Instale diretamente do repositório
-pip install git+https://github.com/Felipe-Alcantara/notion-tasks-cli.git
+# Instalação completa recomendada (CLI + app + MCP)
+pipx install "notion-automacoes[app]"
+# alternativa: uv tool install "notion-automacoes[app]"
+```
+
+O release técnico candidato `notion-automacoes==0.3.0` está preparado. A publicação no PyPI ainda exige
+confirmação de nome/ownership/metadados legais. A instalação básica, sem a
+interface gráfica, é `pipx install notion-automacoes`; o extra `app` adiciona
+Django, MCP e a SPA React já compilada no wheel.
+
+Primeiros comandos, sem token:
+
+```bash
+notion-automacoes --version
+notion-automacoes doctor
+```
+
+Uso unificado:
+
+```bash
+notion-automacoes auth listar
+notion-automacoes tasks listar
+notion-automacoes app start
+notion-automacoes mcp start
+notion-automacoes update
+```
+
+O alias histórico permanece disponível:
+
+```bash
+notion-tasks listar
 ```
 
 Prefere um passo a passo guiado? Clone o repositório e use o menu:
@@ -203,7 +233,7 @@ O arquivo é criado com permissão `600` e a pasta com `700`.
 # Clone e instale com as dependências de desenvolvimento
 git clone https://github.com/Felipe-Alcantara/notion-tasks-cli.git
 cd notion-tasks-cli
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 
 # Execute a suíte
 python -m pytest

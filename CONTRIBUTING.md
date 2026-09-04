@@ -31,7 +31,7 @@ cd notion-tasks-cli
 python start_app.py          # menu: Instalar / Configurar / Status / Usar
 
 # Ou manualmente:
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ruff check .
 python -m pytest
 ```
