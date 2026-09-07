@@ -76,7 +76,8 @@ notion-tasks-cli/
 
 - **Tarefas** — listar, criar, editar, mover e concluir; `criar` também aceita
   databases genéricos ao descobrir a coluna de título pelo schema.
-- **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas.
+- **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas;
+  `exemplo` devolve uma amostra de linhas com propriedades e corpo completos.
 - **Propriedades** — substituir ou acrescentar valores em linhas de database.
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
@@ -167,6 +168,7 @@ notion-tasks mapear
 notion-tasks buscar <termo>
 notion-tasks databases
 notion-tasks linhas <id>
+notion-tasks exemplo --n 3
 notion-tasks editar-linha <id> --set "Status=Feito"
 notion-tasks editar-linha <id> --append "Resumo=..."
 

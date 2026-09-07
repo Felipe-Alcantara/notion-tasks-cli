@@ -474,3 +474,18 @@ alias de compatibilidade. O guia separa instalação distribuída de desenvolvim
 documenta `doctor`/`auth` e aponta para as evidências de release. A titularidade
 legal registrada no pacote é `Felipe Alcantara`; a publicação e o Trusted
 Publishing deixam de ser descritos como pendência.
+
+## [2026-09-07] Comando `exemplo` para copiar padrões de tarefas
+
+A CLI ganhou `notion-tasks exemplo [--n 3]`, uma borda fina que usa o database
+padrão do perfil (`NOTION_DATABASE_ID`), seleciona de 2 a 4 linhas na ordem
+devolvida pelo Notion e relê cada página para devolver propriedades e corpo em
+Markdown na mesma resposta. O resultado JSON inclui a quantidade solicitada,
+retornada e total de linhas, além da lista `exemplos`; a saída humana imprime
+cada exemplo com título, URL, propriedades e corpo.
+
+A escolha de manter a regra no CLI é deliberada: listar linhas e orquestrar a
+leitura de páginas é comportamento específico da borda, enquanto a leitura
+completa continua sendo delegada a `notion_starter.services.conteudo`. Foram
+adicionados testes sem rede para amostra, leitura completa, limite de `--n` e
+exposição no guia. Validação final registrada na task do Notion.

@@ -52,3 +52,7 @@ Publishing. A titularidade legal declarada no pacote é `Felipe Alcantara`.
 Mudanças em subcomandos, entry points, envelope JSON, instalação ou perfis exigem
 atualização do `README.md`, do `--help` e de `IA.md` no mesmo passo. Exemplos
 usam placeholders e nunca registram tokens, IDs reais ou caminhos privados.
+
+O subcomando `exemplo` usa o database padrão configurado no perfil, seleciona de 2 a
+4 linhas (3 por padrão) e reúne propriedades e corpo de cada linha em uma única
+execução da CLI. O teste correspondente usa um cliente falso e não acessa o Notion.

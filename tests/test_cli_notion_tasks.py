@@ -313,6 +313,60 @@ class FakeDatabaseClient(FakeClient):
         ]
 
 
+class FakeExemploClient(FakeClient):
+    """Cliente com linhas e páginas completas para o comando ``exemplo``."""
+
+    _linhas = [
+        {
+            "id": "r1",
+            "url": "https://notion.so/r1",
+            "properties": {"Nome": {"type": "title", "title": [{"plain_text": "Primeira linha"}]}},
+        },
+        {
+            "id": "r2",
+            "url": "https://notion.so/r2",
+            "properties": {"Nome": {"type": "title", "title": [{"plain_text": "Segunda linha"}]}},
+        },
+        {
+            "id": "r3",
+            "url": "https://notion.so/r3",
+            "properties": {"Nome": {"type": "title", "title": [{"plain_text": "Terceira linha"}]}},
+        },
+    ]
+
+    def listar_data_sources(self, database_id):
+        self.chamadas.append(("listar_data_sources", database_id))
+        return [{"id": "ds1", "name": "Tarefas"}]
+
+    def consultar_data_source(self, data_source_id, page_size=100, buscar_todos=False, filtro=None):
+        self.chamadas.append(("consultar_data_source", data_source_id))
+        return self._linhas
+
+    def obter_pagina(self, page_id):
+        self.chamadas.append(("obter_pagina", page_id))
+        linha = next(linha for linha in self._linhas if linha["id"] == page_id)
+        titulo = linha["properties"]["Nome"]["title"][0]["plain_text"]
+        return {
+            "id": page_id,
+            "properties": {
+                "Nome": {
+                    "type": "title",
+                    "title": [{"plain_text": titulo}],
+                },
+                "Status": {"type": "status", "status": {"name": "Entrada"}},
+            },
+        }
+
+    def ler_blocos(self, block_id, page_size=100, buscar_todos=False, recursivo=False):
+        self.chamadas.append(("ler_blocos", block_id))
+        return [
+            {
+                "type": "paragraph",
+                "paragraph": {"rich_text": [{"plain_text": f"Corpo de {block_id}"}]},
+            }
+        ]
+
+
 def _executar(args, fake: FakeTaskList | None = None, client=None):
     tasklist = fake or FakeTaskList()
     notion_client = client or FakeClient()
@@ -758,6 +812,38 @@ def test_conteudo_traz_propriedades_antes_do_corpo():
     assert "Status: Inbox" in saida
 
 
+def test_exemplo_devolve_amostra_completa_do_database_atual():
+    client = FakeExemploClient()
+    with mock.patch.dict(cli.os.environ, {"NOTION_DATABASE_ID": "db1"}, clear=False):
+        codigo, saida = _executar(["--json", "exemplo", "--n", "2"], client=client)
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["database_id"] == "db1"
+    assert dados["quantidade_solicitada"] == 2
+    assert dados["quantidade_retornada"] == 2
+    assert dados["total_linhas"] == 3
+    assert [exemplo["id"] for exemplo in dados["exemplos"]] == ["r1", "r2"]
+    assert dados["exemplos"][0]["titulo"] == "Primeira linha"
+    assert dados["exemplos"][0]["propriedades"] == {
+        "Nome": "Primeira linha",
+        "Status": "Entrada",
+    }
+    assert dados["exemplos"][0]["markdown"] == "Corpo de r1"
+    assert ("obter_pagina", "r1") in client.chamadas
+    assert ("ler_blocos", "r1") in client.chamadas
+
+
+def test_exemplo_rejeita_quantidade_fora_do_intervalo():
+    codigo, saida = _executar(["--json", "exemplo", "--n", "5"])
+
+    assert codigo == 2
+    assert saida == {
+        "ok": False,
+        "erro": {"mensagem": "'--n' deve estar entre 2 e 4."},
+    }
+
+
 def test_linhas_lista_linhas_do_database():
     codigo, saida = _executar(["--json", "linhas", "db1"], client=FakeDatabaseClient())
     assert codigo == 0
@@ -769,7 +855,7 @@ def test_guia_lista_todos_os_comandos():
     assert codigo == 0
     comandos = {c["comando"] for c in saida["dados"]["comandos"]}
     # Cobre tarefas, conteúdo e o próprio guia — reflete o parser.
-    assert {"listar", "conteudo", "linhas", "apagar-bloco", "guia"} <= comandos
+    assert {"listar", "conteudo", "exemplo", "linhas", "apagar-bloco", "guia"} <= comandos
     # Cada comando traz ao menos um exemplo.
     assert all(c["exemplos"] for c in saida["dados"]["comandos"])
 

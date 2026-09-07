@@ -214,6 +214,20 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             rotulo = "## Corpo\n" if partes else ""
             partes.append(f"{rotulo}{dados['markdown']}")
         return "\n\n".join(partes) or "(página sem propriedades nem conteúdo)"
+    if comando == "exemplo":
+        exemplos = dados.get("exemplos", [])
+        if not exemplos:
+            return "Nenhum exemplo encontrado no database configurado."
+        blocos = []
+        for indice, exemplo in enumerate(exemplos, start=1):
+            titulo = exemplo.get("titulo") or "(sem título)"
+            identificador = exemplo.get("id", "")
+            url = exemplo.get("url") or ""
+            cabecalho = f"### Exemplo {indice}: {titulo} ({identificador})"
+            if url:
+                cabecalho += f"\nURL: {url}"
+            blocos.append(f"{cabecalho}\n{_formatar_humano('conteudo', exemplo)}")
+        return "\n\n".join(blocos)
     if comando == "linhas":
         return "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
     if comando == "blocos":
@@ -607,6 +621,40 @@ def cmd_conteudo(args: argparse.Namespace, *, client_factory: ClientFactory) -> 
             "abaixo da tabela."
         )
     return resultado
+
+
+def cmd_exemplo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Devolve uma amostra de linhas do database atual com leitura completa.
+
+    A listagem mantém a ordem devolvida pelo Notion, que funciona como uma
+    amostra determinística. Cada linha é relida como página para incluir as
+    propriedades preenchidas e o corpo em Markdown numa única execução da CLI.
+    """
+
+    quantidade = args.n
+    if not 2 <= quantidade <= 4:
+        raise CLIError("'--n' deve estar entre 2 e 4.")
+
+    database_id = _texto_obrigatorio(
+        os.environ.get("NOTION_DATABASE_ID"), "NOTION_DATABASE_ID"
+    )
+    cliente = client_factory()
+    linhas = svc_conteudo.listar_linhas(database_id, cliente=cliente)
+    exemplos = []
+    for linha in linhas[:quantidade]:
+        page_id = _texto_obrigatorio(linha.get("id"), "id da linha")
+        conteudo = svc_conteudo.ler_pagina_ou_database(page_id, cliente=cliente)
+        conteudo["titulo"] = linha.get("titulo", "")
+        conteudo["url"] = linha.get("url", "")
+        exemplos.append(conteudo)
+
+    return {
+        "database_id": database_id,
+        "quantidade_solicitada": quantidade,
+        "quantidade_retornada": len(exemplos),
+        "total_linhas": len(linhas),
+        "exemplos": exemplos,
+    }
 
 
 def cmd_linhas(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -1195,6 +1243,7 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "mapear": ["python -m cli --json mapear"],
     "buscar": ['python -m cli --json buscar "nota de reunião"'],
     "conteudo": ["python -m cli --json conteudo <page_id>"],
+    "exemplo": ["python -m cli --json exemplo --n 3"],
     "linhas": ["python -m cli --json linhas <database_id>"],
     "editar-linha": [
         'python -m cli --json editar-linha <page_id> --set "Status=Feito"',
@@ -1458,6 +1507,18 @@ def construir_parser() -> argparse.ArgumentParser:
 
     conteudo = sub.add_parser("conteudo", help="lê o conteúdo de uma página como Markdown")
     conteudo.add_argument("page_id")
+
+    exemplo = sub.add_parser(
+        "exemplo",
+        help="devolve 2 a 4 linhas do database padrão com propriedades e corpo completos",
+    )
+    exemplo.add_argument(
+        "--n",
+        type=int,
+        default=3,
+        metavar="N",
+        help="quantidade de exemplos (entre 2 e 4; padrão: 3)",
+    )
 
     linhas = sub.add_parser("linhas", help="lista as linhas de um database (resolve data sources)")
     linhas.add_argument("database_id")
@@ -1952,6 +2013,8 @@ def executar(
             dados = cmd_mapear(args, client_factory=client_factory)
         elif comando == "conteudo":
             dados = cmd_conteudo(args, client_factory=client_factory)
+        elif comando == "exemplo":
+            dados = cmd_exemplo(args, client_factory=client_factory)
         elif comando == "linhas":
             dados = cmd_linhas(args, client_factory=client_factory)
         elif comando == "blocos":
