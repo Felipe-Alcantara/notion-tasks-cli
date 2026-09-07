@@ -172,6 +172,12 @@ notion-tasks exemplo --n 3
 notion-tasks editar-linha <id> --set "Status=Feito"
 notion-tasks editar-linha <id> --append "Resumo=..."
 
+# Relações (o modo de lote reutiliza o mesmo processo e cliente)
+notion-tasks relacionar <page_a> <page_b> --coluna "Subtarefas relacionadas"
+notion-tasks relacionar --coluna "Subtarefas relacionadas" \
+  --par a1:b1 --par a2:b2
+notion-tasks relacionar --coluna "Subtarefas relacionadas" --arquivo pares.json
+
 # Conteúdo de páginas
 notion-tasks conteudo <id>
 notion-tasks blocos <id>
@@ -194,6 +200,11 @@ notion-tasks garantir-coluna <database_id> Idioma select
 # Relatórios diários
 notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports
 ```
+
+`--arquivo` recebe uma lista JSON de objetos com `page_a` e `page_b`. Também são
+aceitos itens no formato `"a:b"` ou listas de dois IDs. O resultado em JSON traz
+um relatório por par em `resultados`, incluindo sucessos e falhas sem interromper
+os demais pares.
 
 Também funciona como módulo com `python -m cli ...`. Execute
 `notion-tasks --help` para consultar o guia completo e os demais subcomandos.

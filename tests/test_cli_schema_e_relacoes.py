@@ -190,6 +190,121 @@ def test_relacionar_ignora_hifen_ao_comparar_a_mesma_pagina():
     assert codigo == 2
 
 
+def test_relacionar_aceita_varios_pares_e_reutiliza_o_cliente():
+    cliente = ClienteFalso()
+    chamadas_factory = 0
+
+    def criar_cliente():
+        nonlocal chamadas_factory
+        chamadas_factory += 1
+        return cliente
+
+    codigo, saida = cli.executar(
+        [
+            "--json",
+            "relacionar",
+            "--coluna",
+            "Relacionadas",
+            "--par",
+            "pg-a:pg-b",
+            "--par",
+            "pg-c:pg-d",
+        ],
+        client_factory=criar_cliente,
+    )
+
+    assert codigo == 0
+    assert chamadas_factory == 1
+    dados = saida["dados"]
+    assert dados["total"] == 2
+    assert dados["sucessos"] == 2
+    assert dados["erros"] == 0
+    assert [item["resultado"]["acao"] for item in dados["resultados"]] == [
+        "ligada",
+        "ligada",
+    ]
+    assert [page_id for page_id, _ in cliente.patches] == [
+        "pg-a",
+        "pg-b",
+        "pg-c",
+        "pg-d",
+    ]
+
+
+def test_relacionar_arquivo_aceita_objetos_listas_e_strings(tmp_path):
+    arquivo = tmp_path / "pares.json"
+    arquivo.write_text(
+        json.dumps(
+            {
+                "pares": [
+                    {"page_a": "pg-a", "page_b": "pg-b"},
+                    ["pg-c", "pg-d"],
+                    "pg-e:pg-f",
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cliente = ClienteFalso()
+
+    codigo, saida = _executar(
+        ["--json", "relacionar", "--coluna", "Relacionadas", "--arquivo", str(arquivo)],
+        cliente,
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["total"] == 3
+    assert [
+        (item["page_a"], item["page_b"]) for item in saida["dados"]["resultados"]
+    ] == [("pg-a", "pg-b"), ("pg-c", "pg-d"), ("pg-e", "pg-f")]
+
+
+def test_relacionar_lote_retorna_falha_do_par_e_continua():
+    cliente = ClienteFalso()
+
+    codigo, saida = _executar(
+        [
+            "--json",
+            "relacionar",
+            "--coluna",
+            "Relacionadas",
+            "--par",
+            "pg-a:pg-a",
+            "--par",
+            "pg-c:pg-d",
+        ],
+        cliente,
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["sucessos"] == 1
+    assert dados["erros"] == 1
+    assert "mesma página" in dados["resultados"][0]["erro"]["mensagem"]
+    assert dados["resultados"][1]["ok"] is True
+    assert [page_id for page_id, _ in cliente.patches] == ["pg-c", "pg-d"]
+
+
+def test_relacionar_arquivo_invalido_falha_antes_de_criar_cliente(tmp_path):
+    arquivo = tmp_path / "pares.json"
+    arquivo.write_text("{ inválido", encoding="utf-8")
+    chamadas_factory = 0
+
+    def criar_cliente():
+        nonlocal chamadas_factory
+        chamadas_factory += 1
+        return ClienteFalso()
+
+    codigo, saida = cli.executar(
+        ["--json", "relacionar", "--coluna", "Relacionadas", "--arquivo", str(arquivo)],
+        client_factory=criar_cliente,
+    )
+
+    assert codigo == 2
+    assert chamadas_factory == 0
+    assert "JSON inválido" in saida["erro"]["mensagem"]
+
+
 # ------------------------------------------------------- guarda da database
 
 

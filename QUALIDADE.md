@@ -56,3 +56,7 @@ usam placeholders e nunca registram tokens, IDs reais ou caminhos privados.
 O subcomando `exemplo` usa o database padrão configurado no perfil, seleciona de 2 a
 4 linhas (3 por padrão) e reúne propriedades e corpo de cada linha em uma única
 execução da CLI. O teste correspondente usa um cliente falso e não acessa o Notion.
+
+O subcomando `relacionar` mantém a forma legada de um par e também aceita lotes
+com `--par` repetido ou `--arquivo`. O lote valida todas as entradas antes de
+escrever, reutiliza o cliente e devolve o resultado individual de cada par.

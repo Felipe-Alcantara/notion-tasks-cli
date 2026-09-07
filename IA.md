@@ -534,3 +534,22 @@ Testes cobrem os dois casos (com e sem `--completo`) no nível do CLI, além dos
 `test_doctor_funciona_sem_token_e_nao_exibe_credencial`, confirmada via `git
 stash` antes desta mudança) e `ruff check .` limpo. Testado ao vivo contra a
 database "Áreas da vida" real.
+
+## [2026-09-07] `relacionar` aceita vários pares numa chamada
+
+O comando `relacionar` preserva a forma legada com dois IDs posicionais e agora
+aceita `--par page_a:page_b` repetido ou `--arquivo pares.json`. O arquivo pode
+conter objetos com `page_a`/`page_b`, listas de dois IDs ou strings no mesmo
+formato de `--par`.
+
+A borda valida todo o lote antes da primeira escrita, cria o `NotionClient` uma
+única vez e chama `notion_starter.services.relacoes.relacionar` para cada par,
+mantendo a conferência idempotente das duas pontas. A saída de lote traz
+`total`, `sucessos`, `erros` e um `resultados` por par; falha em um item não
+impede os demais, enquanto a chamada legada mantém o envelope anterior.
+
+Testes sem rede cobrem o modo posicional, dois pares na mesma execução, um único
+cliente, arquivo JSON, erro por par e arquivo inválido. No gate desta task,
+`ruff check .` passou e `python -m pytest` teve **202 passed, 2 skipped e 1
+falha pré-existente** em `test_doctor_funciona_sem_token_e_nao_exibe_credencial`,
+fora do escopo e sem arquivos alterados por esta mudança.

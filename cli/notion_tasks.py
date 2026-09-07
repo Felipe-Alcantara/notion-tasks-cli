@@ -238,6 +238,19 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"Propriedades: {len(dados['propriedades'])} | "
             f"linhas copiadas: {dados['linhas_copiadas']}"
         )
+    if comando == "relacionar" and "resultados" in dados:
+        linhas = [
+            f"Pares: {dados['total']} | sucessos: {dados['sucessos']} | "
+            f"erros: {dados['erros']}"
+        ]
+        for item in dados["resultados"]:
+            par = f"{item['page_a']} ↔ {item['page_b']}"
+            if item["ok"]:
+                acao = item["resultado"].get("acao", "concluído")
+                linhas.append(f"OK   {par}: {acao}")
+            else:
+                linhas.append(f"ERRO {par}: {item['erro']['mensagem']}")
+        return "\n".join(linhas)
     if comando == "criar-subpagina":
         return f"Subpágina criada: {dados['titulo']} ({dados['id']})\nURL: {dados['url']}"
     if comando == "inspecionar-estrutura":
@@ -792,6 +805,119 @@ def _sem_hifens(identificador: str) -> str:
     return str(identificador).replace("-", "").lower()
 
 
+def _texto_par_relacao(valor: Any, origem: str) -> str:
+    """Valida um ID vindo de ``--par`` ou de um arquivo JSON."""
+
+    if not isinstance(valor, str):
+        raise CLIError(f"{origem} deve conter IDs como texto.")
+    return _texto_obrigatorio(valor, origem)
+
+
+def _par_relacao(valor: Any, origem: str) -> tuple[str, str]:
+    """Converte ``page_a:page_b`` em um par validado."""
+
+    if not isinstance(valor, str):
+        raise CLIError(f"Use o formato \"page_a:page_b\" em {origem}.")
+    page_a, separador, page_b = valor.partition(":")
+    if not separador:
+        raise CLIError(f"Use o formato \"page_a:page_b\" em {origem} (recebido: {valor!r}).")
+    return (
+        _texto_par_relacao(page_a, f"{origem} (page_a)"),
+        _texto_par_relacao(page_b, f"{origem} (page_b)"),
+    )
+
+
+def _par_relacao_do_json(valor: Any, indice: int) -> tuple[str, str]:
+    """Lê um item de ``--arquivo`` em formato objeto, lista ou ``a:b``."""
+
+    origem = f"--arquivo item {indice}"
+    if isinstance(valor, str):
+        return _par_relacao(valor, origem)
+    if isinstance(valor, (list, tuple)):
+        if len(valor) != 2:
+            raise CLIError(f"{origem} deve ser uma lista com exatamente dois IDs.")
+        return (
+            _texto_par_relacao(valor[0], f"{origem} (page_a)"),
+            _texto_par_relacao(valor[1], f"{origem} (page_b)"),
+        )
+    if isinstance(valor, dict):
+        if "page_a" not in valor or "page_b" not in valor:
+            raise CLIError(f"{origem} deve ter as chaves 'page_a' e 'page_b'.")
+        return (
+            _texto_par_relacao(valor["page_a"], f"{origem}.page_a"),
+            _texto_par_relacao(valor["page_b"], f"{origem}.page_b"),
+        )
+    raise CLIError(
+        f"{origem} deve ser \"a:b\", uma lista de dois IDs "
+        "ou um objeto com page_a/page_b."
+    )
+
+
+def _pares_relacao_do_arquivo(caminho: str) -> list[tuple[str, str]]:
+    """Carrega e valida a lista de pares de um arquivo JSON."""
+
+    arquivo = Path(_texto_obrigatorio(caminho, "arquivo"))
+    try:
+        conteudo = arquivo.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise CLIError(f"Não foi possível ler o arquivo de pares '{arquivo}': {exc}") from exc
+    try:
+        dados = json.loads(conteudo)
+    except json.JSONDecodeError as exc:
+        raise CLIError(
+            f"JSON inválido no arquivo de pares '{arquivo}' "
+            f"(linha {exc.lineno}, coluna {exc.colno})."
+        ) from exc
+
+    if isinstance(dados, dict) and "pares" in dados:
+        dados = dados["pares"]
+    elif isinstance(dados, dict) and {"page_a", "page_b"}.issubset(dados):
+        dados = [dados]
+    if not isinstance(dados, list):
+        raise CLIError(
+            "O arquivo de pares deve conter uma lista JSON "
+            "ou um objeto com a chave 'pares'."
+        )
+    if not dados:
+        raise CLIError("O arquivo de pares não contém nenhum par.")
+    return [_par_relacao_do_json(valor, indice) for indice, valor in enumerate(dados, start=1)]
+
+
+def _obter_pares_relacao(args: argparse.Namespace) -> tuple[list[tuple[str, str]], bool]:
+    """Resolve o par legado ou as entradas de lote do comando ``relacionar``."""
+
+    page_a = getattr(args, "page_a", None)
+    page_b = getattr(args, "page_b", None)
+    pares = getattr(args, "par", None) or []
+    arquivo = getattr(args, "arquivo", None)
+    tem_posicionais = page_a is not None or page_b is not None
+    tem_lote = bool(pares) or bool(arquivo)
+
+    if tem_posicionais:
+        if page_a is None or page_b is None:
+            raise CLIError("Informe page_a e page_b juntos.")
+        if tem_lote:
+            raise CLIError("Não misture page_a/page_b com --par ou --arquivo.")
+        return [
+            (
+                _texto_obrigatorio(page_a, "page_a"),
+                _texto_obrigatorio(page_b, "page_b"),
+            )
+        ], False
+    if pares and arquivo:
+        raise CLIError("Use --par ou --arquivo, não os dois ao mesmo tempo.")
+    if pares:
+        return [
+            _par_relacao(valor, f"--par #{indice}")
+            for indice, valor in enumerate(pares, 1)
+        ], True
+    if arquivo:
+        return _pares_relacao_do_arquivo(arquivo), True
+    raise CLIError(
+        "Informe page_a e page_b, repita --par \"page_a:page_b\" ou use --arquivo <pares.json>."
+    )
+
+
 def cmd_schema(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     """Descreve o schema real de um database: colunas, tipos, opções e relações.
 
@@ -816,26 +942,72 @@ def cmd_schema(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
 
 
 def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    """Liga duas linhas numa coluna de relação, **nos dois sentidos**.
+    """Liga uma ou várias linhas numa coluna de relação, **nos dois sentidos**.
 
     Uma relação ``single_property`` do Notion parece bidirecional na interface
     (ligar pela tela mostra as duas páginas se enxergando), mas pela API só o
     lado escrito é gravado. Este comando resolve isso: descobre a configuração
     da coluna e, quando ela é de mão única, escreve as duas pontas.
+
+    A forma posicional antiga continua aceitando um par. Para lotes, ``--par``
+    pode ser repetido ou ``--arquivo`` pode apontar para um JSON com uma lista
+    de objetos ``{"page_a": "...", "page_b": "..."}``.
     """
 
-    origem = _texto_obrigatorio(args.page_a, "page_a")
-    destino = _texto_obrigatorio(args.page_b, "page_b")
     coluna = _texto_obrigatorio(args.coluna, "coluna")
-    if _sem_hifens(origem) == _sem_hifens(destino):
-        raise CLIError("page_a e page_b são a mesma página — nada a relacionar.")
-    return svc_relacoes.relacionar(
-        origem,
-        destino,
-        coluna,
-        desfazer=args.desfazer,
-        cliente=client_factory(),
-    )
+    pares, lote = _obter_pares_relacao(args)
+    cliente = client_factory()
+
+    if not lote:
+        origem, destino = pares[0]
+        if _sem_hifens(origem) == _sem_hifens(destino):
+            raise CLIError("page_a e page_b são a mesma página — nada a relacionar.")
+        return svc_relacoes.relacionar(
+            origem,
+            destino,
+            coluna,
+            desfazer=args.desfazer,
+            cliente=cliente,
+        )
+
+    resultados: list[dict[str, Any]] = []
+    for indice, (origem, destino) in enumerate(pares, start=1):
+        item: dict[str, Any] = {
+            "indice": indice,
+            "page_a": origem,
+            "page_b": destino,
+        }
+        if _sem_hifens(origem) == _sem_hifens(destino):
+            item.update(
+                ok=False,
+                erro={"mensagem": "page_a e page_b são a mesma página — nada a relacionar."},
+            )
+            resultados.append(item)
+            continue
+        try:
+            resultado = svc_relacoes.relacionar(
+                origem,
+                destino,
+                coluna,
+                desfazer=args.desfazer,
+                cliente=cliente,
+            )
+        except (CLIError, ValueError, NotionAPIError) as exc:
+            mensagem = _mensagem_erro_notion(exc) if isinstance(exc, NotionAPIError) else str(exc)
+            item.update(ok=False, erro={"mensagem": mensagem})
+        else:
+            item.update(ok=True, resultado=resultado)
+        resultados.append(item)
+
+    erros = sum(1 for item in resultados if not item["ok"])
+    return {
+        "coluna": coluna,
+        "desfazer": args.desfazer,
+        "total": len(resultados),
+        "sucessos": len(resultados) - erros,
+        "erros": erros,
+        "resultados": resultados,
+    }
 
 
 def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -1302,6 +1474,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "relacionar": [
         'python -m cli --json relacionar <page_a> <page_b> --coluna "Subtarefas relacionadas"',
         'python -m cli --json relacionar <page_a> <page_b> --coluna "Depende de" --desfazer',
+        'python -m cli --json relacionar --coluna "Subtarefas relacionadas" '
+        '--par a1:b1 --par a2:b2',
+        'python -m cli --json relacionar --coluna "Subtarefas relacionadas" '
+        '--arquivo pares.json',
     ],
     "clonar-database": [
         "python -m cli --json clonar-database <database_id>",
@@ -1662,13 +1838,26 @@ def construir_parser() -> argparse.ArgumentParser:
 
     relacionar = sub.add_parser(
         "relacionar",
-        help="liga duas linhas por uma coluna de relação NOS DOIS SENTIDOS — "
+        help="liga uma ou várias linhas por uma coluna de relação NOS DOIS SENTIDOS — "
         "relação single_property do Notion não espelha sozinha pela API",
     )
-    relacionar.add_argument("page_a")
-    relacionar.add_argument("page_b")
+    relacionar.add_argument("page_a", nargs="?", help="primeira página (forma legada de um par)")
+    relacionar.add_argument("page_b", nargs="?", help="segunda página (forma legada de um par)")
     relacionar.add_argument(
         "--coluna", required=True, help='nome da coluna de relação (ex.: "Subtarefas relacionadas")'
+    )
+    entradas_relacao = relacionar.add_mutually_exclusive_group()
+    entradas_relacao.add_argument(
+        "--par",
+        action="append",
+        help='par no formato "page_a:page_b"; repita para ligar vários pares',
+    )
+    entradas_relacao.add_argument(
+        "--arquivo",
+        help=(
+            "arquivo JSON com uma lista de pares; cada item pode ser objeto, "
+            "lista de dois IDs ou 'a:b'"
+        ),
     )
     relacionar.add_argument(
         "--desfazer", action="store_true", help="remove a ligação em vez de criá-la"
