@@ -264,6 +264,11 @@ def _formatar_humano(comando: str, dados: Any) -> str:
     if comando == "garantir-coluna":
         acao = "criada" if dados["criada"] else "já existia"
         return f"Coluna '{dados['coluna']}' ({dados['tipo']}) {acao} em {dados['database_id']}."
+    if comando == "renomear-coluna":
+        return (
+            f"Coluna '{dados['coluna_antiga']}' renomeada para "
+            f"'{dados['coluna_nova']}' em {dados['database_id']}."
+        )
     if comando == "database-atual":
         if not dados["database_id"]:
             return "Database atual: (não configurado)"
@@ -1030,6 +1035,15 @@ def cmd_garantir_coluna(args: argparse.Namespace, *, client_factory: ClientFacto
     return {"database_id": database_id, "coluna": nome_coluna, "tipo": args.tipo, "criada": criada}
 
 
+def cmd_renomear_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    nome_atual = _texto_obrigatorio(args.nome_atual, "nome_atual")
+    novo_nome = _texto_obrigatorio(args.novo_nome, "novo_nome")
+
+    svc_schema.renomear_coluna(database_id, nome_atual, novo_nome, cliente=client_factory())
+    return {"database_id": database_id, "coluna_antiga": nome_atual, "coluna_nova": novo_nome}
+
+
 def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
     return {
         "repos_encontrados": resumo.repos_encontrados,
@@ -1311,6 +1325,9 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json garantir-coluna <database_id> Observações texto",
         "python -m cli --json garantir-coluna <database_id> Projeto relacao "
         "--relacionar-com <database_alvo_id>",
+    ],
+    "renomear-coluna": [
+        'python -m cli --json renomear-coluna <database_id> "Related to X (Y)" "Bloqueia"',
     ],
     "atualizar-github": [
         "python -m cli --json atualizar-github --contas conta-um,conta-dois",
@@ -1789,6 +1806,18 @@ def construir_parser() -> argparse.ArgumentParser:
         "A relação é bidirecional: o Notion cria a coluna espelho no database alvo",
     )
 
+    renomear_coluna = sub.add_parser(
+        "renomear-coluna",
+        help="renomeia uma coluna (propriedade) já existente no schema de um "
+        "database, sem tocar no tipo, nas opções nem nas linhas — cobre o caso "
+        "de o Notion criar sozinho a coluna espelho de uma relação nova com um "
+        "nome genérico. Para trocar o título do database inteiro, use "
+        "renomear-database",
+    )
+    renomear_coluna.add_argument("database_id")
+    renomear_coluna.add_argument("nome_atual")
+    renomear_coluna.add_argument("novo_nome")
+
     atualizar_github = sub.add_parser(
         "atualizar-github",
         help="re-sincroniza o database GITHUB (repos novos, propriedades, README mudado)",
@@ -2051,6 +2080,8 @@ def executar(
             dados = cmd_reordenar_bloco(args, client_factory=client_factory)
         elif comando == "garantir-coluna":
             dados = cmd_garantir_coluna(args, client_factory=client_factory)
+        elif comando == "renomear-coluna":
+            dados = cmd_renomear_coluna(args, client_factory=client_factory)
         elif comando == "atualizar-github":
             dados = cmd_atualizar_github(args, client_factory=client_factory)
         elif comando == "exportar-docx":

@@ -489,3 +489,26 @@ leitura de páginas é comportamento específico da borda, enquanto a leitura
 completa continua sendo delegada a `notion_starter.services.conteudo`. Foram
 adicionados testes sem rede para amostra, leitura completa, limite de `--n` e
 exposição no guia. Validação final registrada na task do Notion.
+
+## [2026-09-07] Comando `renomear-coluna`
+
+A CLI ganhou `notion-tasks renomear-coluna <database_id> <nome_atual> <novo_nome>`,
+para o caso que faltava desde sempre: o Notion cria sozinho a coluna espelho de
+toda relação nova com um nome genérico (`"Related to <database> (<coluna>)"`), e
+não havia como corrigir isso sem sair da ferramenta — `renomear-database` só troca
+o título do database inteiro, não uma propriedade dele.
+
+A regra de negócio foi pro `notion_starter` (`services/schema.py:renomear_coluna`),
+ao lado de `garantir_coluna` e com a mesma estratégia dela: usa o *data source*
+(modelo novo do Notion, `PATCH /data_sources/{id}`, versão `2025-09-03`) quando o
+database expõe um, cai para o endpoint clássico de database caso contrário.
+Valida que a coluna atual existe e que o novo nome não colide com outra já
+existente antes de gravar. O CLI é só a borda fina de sempre (parse + dispatch).
+
+Testes cobrem os dois caminhos (data source e clássico) e as duas rejeições
+(coluna inexistente, colisão de nome), reaproveitando o `ClienteFake` já usado
+pelos testes de `garantir_coluna`. O mecanismo (`atualizar_data_source`/
+`atualizar_database` com `{"properties": {nome: {"name": novo_nome}}}`) já tinha
+sido usado manualmente, fora da CLI, para renomear a coluna espelho de "Bloqueada
+por" pra "Bloqueia" na database de Tarefas — este comando fecha essa lacuna de
+verdade, sem precisar de script solto na próxima vez.
