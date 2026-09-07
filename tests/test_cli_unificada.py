@@ -69,7 +69,11 @@ def test_auth_delega_para_perfis_com_flags_globais(monkeypatch):
 def test_doctor_funciona_sem_token_e_nao_exibe_credencial(monkeypatch, tmp_path, capsys):
     """Doctor deve ser útil no primeiro comando, antes de qualquer token."""
 
+    # ``pasta_configuracao`` usa XDG no POSIX e APPDATA no Windows. Cobrir os
+    # dois evita que o perfil real da máquina entre no diagnóstico durante a
+    # suíte, independentemente do sistema operacional.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.delenv("NOTION_TOKEN", raising=False)
     monkeypatch.setattr(
         socket,
@@ -82,6 +86,11 @@ def test_doctor_funciona_sem_token_e_nao_exibe_credencial(monkeypatch, tmp_path,
 
     assert codigo == 0
     assert saida["ok"] is True
+    assert saida["perfis"]["caminho"] == str(
+        tmp_path / "notion-tasks" / ".notion-workspaces.json"
+    )
+    assert saida["perfis"]["quantidade"] == 0
+    assert saida["perfis"]["ativo"] == ""
     assert any(
         item["nome"] == "Credencial" and item["estado"] == "aviso"
         for item in saida["checks"]

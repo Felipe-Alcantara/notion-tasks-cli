@@ -553,3 +553,15 @@ cliente, arquivo JSON, erro por par e arquivo inválido. No gate desta task,
 `ruff check .` passou e `python -m pytest` teve **202 passed, 2 skipped e 1
 falha pré-existente** em `test_doctor_funciona_sem_token_e_nao_exibe_credencial`,
 fora do escopo e sem arquivos alterados por esta mudança.
+
+## [2026-09-07] Teste do `doctor` isola perfis reais no Windows
+
+O teste `test_doctor_funciona_sem_token_e_nao_exibe_credencial` agora troca tanto
+`XDG_CONFIG_HOME` quanto `APPDATA`. O `doctor` resolve `pasta_configuracao()` em
+tempo de execução e, no Windows, consulta `%APPDATA%`; trocar apenas
+`ARQUIVO_PADRAO` na fixture e `XDG_CONFIG_HOME` no teste deixava o store real da
+máquina entrar no diagnóstico. O teste também fixa caminho temporário, zero
+perfis e nenhum perfil ativo antes de verificar o aviso de credencial.
+
+**Validação:** o teste focado e os 8 testes de `test_cli_unificada.py` passaram,
+`ruff check .` passou e o gate completo teve **203 passed, 2 skipped**.
