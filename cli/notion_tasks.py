@@ -664,7 +664,11 @@ def cmd_exemplo(args: argparse.Namespace, *, client_factory: ClientFactory) -> A
 
 def cmd_linhas(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     database_id = _texto_obrigatorio(args.database_id, "database_id")
-    linhas = svc_conteudo.listar_linhas(database_id, cliente=client_factory())
+    linhas = svc_conteudo.listar_linhas(
+        database_id,
+        propriedades=getattr(args, "completo", False),
+        cliente=client_factory(),
+    )
     return {"id": database_id, "linhas": linhas}
 
 
@@ -1258,7 +1262,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "buscar": ['python -m cli --json buscar "nota de reunião"'],
     "conteudo": ["python -m cli --json conteudo <page_id>"],
     "exemplo": ["python -m cli --json exemplo --n 3"],
-    "linhas": ["python -m cli --json linhas <database_id>"],
+    "linhas": [
+        "python -m cli --json linhas <database_id>",
+        "python -m cli --json linhas <database_id> --completo",
+    ],
     "editar-linha": [
         'python -m cli --json editar-linha <page_id> --set "Status=Feito"',
         'python -m cli --json editar-linha <page_id> --set "Prazo=2026-07-10" '
@@ -1539,6 +1546,13 @@ def construir_parser() -> argparse.ArgumentParser:
 
     linhas = sub.add_parser("linhas", help="lista as linhas de um database (resolve data sources)")
     linhas.add_argument("database_id")
+    linhas.add_argument(
+        "--completo",
+        action="store_true",
+        help="cada linha ganha 'propriedades' com todas as colunas já reduzidas "
+        "a nome -> valor simples — evita 'conteudo'/'obter_pagina' linha a linha "
+        "para analisar um database inteiro. Sem a flag, devolve só id/titulo/url",
+    )
 
     editar_linha = sub.add_parser(
         "editar-linha",

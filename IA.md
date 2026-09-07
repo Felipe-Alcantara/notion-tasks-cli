@@ -512,3 +512,25 @@ pelos testes de `garantir_coluna`. O mecanismo (`atualizar_data_source`/
 sido usado manualmente, fora da CLI, para renomear a coluna espelho de "Bloqueada
 por" pra "Bloqueia" na database de Tarefas — este comando fecha essa lacuna de
 verdade, sem precisar de script solto na próxima vez.
+
+## [2026-09-07] `linhas` ganhou `--completo`
+
+`notion-tasks linhas` sempre devolveu só id/título/url por linha — quem
+precisava das propriedades completas de uma database inteira (classificar
+colunas em massa, cruzar relações, auditar cobertura) tinha que sair da CLI e
+chamar o client Python direto. Bateu nesse teto pelo menos quatro vezes numa
+sessão só, preenchendo a database de Tarefas.
+
+`--completo` repassa `propriedades=True` para o `listar_linhas` do
+`notion-starter` (que ganhou o parâmetro na mesma leva) — cada linha passa a
+trazer `"propriedades"` com todas as colunas já em `nome -> valor simples`.
+Sem a flag, a saída continua idêntica à de sempre. Borda fina de sempre: o CLI
+só repassa a flag, a leitura e a normalização vivem no `notion-starter`.
+
+Testes cobrem os dois casos (com e sem `--completo`) no nível do CLI, além dos
+4 testes de serviço no `notion-starter`.
+
+**Validação:** 198 testes verdes (1 falha pré-existente sem relação,
+`test_doctor_funciona_sem_token_e_nao_exibe_credencial`, confirmada via `git
+stash` antes desta mudança) e `ruff check .` limpo. Testado ao vivo contra a
+database "Áreas da vida" real.

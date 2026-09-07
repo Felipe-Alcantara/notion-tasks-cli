@@ -848,6 +848,15 @@ def test_linhas_lista_linhas_do_database():
     codigo, saida = _executar(["--json", "linhas", "db1"], client=FakeDatabaseClient())
     assert codigo == 0
     assert saida["dados"]["linhas"][0]["id"] == "r1"
+    assert "propriedades" not in saida["dados"]["linhas"][0]
+
+
+def test_linhas_completo_traz_propriedades_normalizadas():
+    codigo, saida = _executar(
+        ["--json", "linhas", "db1", "--completo"], client=FakeDatabaseClient()
+    )
+    assert codigo == 0
+    assert saida["dados"]["linhas"][0]["propriedades"] == {"Name": "Linha 1"}
 
 
 def test_guia_lista_todos_os_comandos():
