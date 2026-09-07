@@ -60,3 +60,8 @@ execução da CLI. O teste correspondente usa um cliente falso e não acessa o N
 O subcomando `relacionar` mantém a forma legada de um par e também aceita lotes
 com `--par` repetido ou `--arquivo`. O lote valida todas as entradas antes de
 escrever, reutiliza o cliente e devolve o resultado individual de cada par.
+
+`criar` e `editar-linha` aceitam `--arquivo` em JSON/CSV para processar muitas
+linhas na mesma execução. O arquivo é lido uma vez, o cliente/TaskList é
+reutilizado, o progresso sai em stderr e o envelope final separa sucessos, erros
+e criações pendentes, sem interromper o lote por uma falha individual.

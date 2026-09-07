@@ -162,6 +162,10 @@ notion-tasks concluir <id> "Concluído"
 notion-tasks criar "Relatório — 25/08/2026" \
   --set "Data=2026-08-25" --set "Status=Concluído" --conteudo "# Resultado"
 
+# Lotes de linhas (um único processo; progresso vai para stderr)
+notion-tasks criar --arquivo novas-linhas.json --progresso-a-cada 25
+notion-tasks editar-linha --arquivo atualizacoes.json --progresso-a-cada 25
+
 # Workspace
 notion-tasks --perfil cliente listar
 notion-tasks mapear
@@ -205,6 +209,21 @@ notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --sa
 aceitos itens no formato `"a:b"` ou listas de dois IDs. O resultado em JSON traz
 um relatório por par em `resultados`, incluindo sucessos e falhas sem interromper
 os demais pares.
+
+Nos comandos `criar` e `editar-linha`, `--arquivo` recebe um lote de linhas sem
+abrir um novo processo para cada item. Em JSON, uma edição usa
+`{"page_id": "<page_id>", "propriedades": {"Status": "Feito"}}`; uma criação
+usa `{"nome": "Nova linha", "propriedades": {"Status": "Entrada"}}`. O campo
+`append` é opcional para acrescentar texto em colunas de texto. Também são aceitos
+os aliases `id`/`titulo` e a lista de itens `Nome=valor`.
+
+CSV usa `page_id` (ou `id`) para editar e `nome` (ou `titulo`) para criar; todas as
+outras colunas são propriedades e colunas com prefixo `append:` fazem append. A
+saída JSON traz `total`, `processados`, `sucessos`, `erros`, `pendentes` e um item
+em `resultados` para cada linha. Falhas de validação/API ficam na linha afetada e
+as demais continuam; uma criação feita cuja complementação falhe fica como
+`pendente` com o ID já criado. O progresso periódico é emitido em stderr para
+manter stdout como JSON válido.
 
 Também funciona como módulo com `python -m cli ...`. Execute
 `notion-tasks --help` para consultar o guia completo e os demais subcomandos.

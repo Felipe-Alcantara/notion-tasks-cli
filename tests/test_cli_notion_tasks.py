@@ -80,6 +80,26 @@ class FakeTaskList:
         }
 
 
+class FakeTaskListLote:
+    """TaskList mínimo para verificar criação de várias linhas."""
+
+    def __init__(self) -> None:
+        self.chamadas: list[tuple[str, object]] = []
+
+    def criar(self, nome, status=None, prazo=None, duracao=None, areas=None):
+        indice = len([chamada for chamada in self.chamadas if chamada[0] == "criar"]) + 1
+        self.chamadas.append(("criar", (nome, status, prazo, duracao, areas)))
+        return Tarefa(
+            id=f"novo-{indice}",
+            nome=nome,
+            status=status,
+            prazo=prazo,
+            duracao=duracao,
+            areas=areas or [],
+            url=f"https://notion.so/novo-{indice}",
+        )
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.chamadas: list[tuple[str, object]] = []
@@ -684,6 +704,153 @@ def test_editar_linha_sem_set_erra():
     assert not saida["ok"]
 
 
+def test_editar_linha_lote_reutiliza_cliente_e_continua_depois_de_erro(
+    tmp_path: Path, capsys
+):
+    arquivo = tmp_path / "edicoes.json"
+    arquivo.write_text(
+        json.dumps(
+            [
+                {"page_id": "p1", "propriedades": {"Status": "Feito"}},
+                {"page_id": "ruim", "propriedades": {"Status": "Feito"}},
+                {"page_id": "p2", "propriedades": {"Peso": 3}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cliente = FakeClient()
+    obter_pagina = cliente.obter_pagina
+
+    def obter_pagina_com_falha(page_id):
+        if page_id == "ruim":
+            raise ValueError("falha da linha de teste")
+        return obter_pagina(page_id)
+
+    cliente.obter_pagina = obter_pagina_com_falha
+    chamadas_factory = 0
+
+    def criar_cliente():
+        nonlocal chamadas_factory
+        chamadas_factory += 1
+        return cliente
+
+    codigo, saida = cli.executar(
+        [
+            "--json",
+            "editar-linha",
+            "--arquivo",
+            str(arquivo),
+            "--progresso-a-cada",
+            "2",
+        ],
+        client_factory=criar_cliente,
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["total"] == 3
+    assert dados["processados"] == 3
+    assert dados["sucessos"] == 2
+    assert dados["erros"] == 1
+    assert dados["pendentes"] == 0
+    assert dados["resultados"][1]["page_id"] == "ruim"
+    assert dados["resultados"][1]["estado"] == "erro"
+    assert "falha da linha de teste" in dados["resultados"][1]["erro"]["mensagem"]
+    assert chamadas_factory == 1
+    assert [chamada[1][0] for chamada in cliente.chamadas if chamada[0] == "atualizar_pagina"] == [
+        "p1",
+        "p2",
+    ]
+    progresso = capsys.readouterr().err
+    assert "[lote] 2/3" in progresso
+    assert "[lote] 3/3" in progresso
+
+
+def test_criar_lote_reutiliza_tasklist_e_marca_criacao_parcial_como_pendente(
+    tmp_path: Path, capsys
+):
+    arquivo = tmp_path / "novas.json"
+    arquivo.write_text(
+        json.dumps(
+            [
+                {"nome": "Primeira", "propriedades": {"Status": "Feito"}},
+                {"nome": "Parcial", "propriedades": {"Status": "Feito"}},
+                {"nome": "Sem propriedades"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tasklist = FakeTaskListLote()
+    cliente = FakeClient()
+    obter_pagina = cliente.obter_pagina
+
+    def obter_pagina_com_falha(page_id):
+        if page_id == "novo-2":
+            raise ValueError("não foi possível aplicar as propriedades")
+        return obter_pagina(page_id)
+
+    cliente.obter_pagina = obter_pagina_com_falha
+    chamadas_tasklist = 0
+    chamadas_cliente = 0
+
+    def criar_tasklist():
+        nonlocal chamadas_tasklist
+        chamadas_tasklist += 1
+        return tasklist
+
+    def criar_cliente():
+        nonlocal chamadas_cliente
+        chamadas_cliente += 1
+        return cliente
+
+    codigo, saida = cli.executar(
+        [
+            "--json",
+            "criar",
+            "--arquivo",
+            str(arquivo),
+            "--progresso-a-cada",
+            "2",
+        ],
+        tasklist_factory=criar_tasklist,
+        client_factory=criar_cliente,
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["total"] == 3
+    assert dados["sucessos"] == 2
+    assert dados["erros"] == 0
+    assert dados["pendentes"] == 1
+    assert dados["resultados"][1]["estado"] == "pendente"
+    assert dados["resultados"][1]["page_id"] == "novo-2"
+    assert "não foi possível aplicar" in dados["resultados"][1]["erro"]["mensagem"]
+    assert chamadas_tasklist == 1
+    assert chamadas_cliente == 1
+    assert len([chamada for chamada in tasklist.chamadas if chamada[0] == "criar"]) == 3
+    assert "[lote] 3/3" in capsys.readouterr().err
+
+
+def test_editar_linha_lote_aceita_csv_com_append(tmp_path: Path):
+    arquivo = tmp_path / "edicoes.csv"
+    arquivo.write_text(
+        "page_id,Status,append:Nome\np1,Feito,nota nova\n",
+        encoding="utf-8",
+    )
+    cliente = FakeClient()
+
+    codigo, saida = cli.executar(
+        ["--json", "editar-linha", "--arquivo", str(arquivo)],
+        client_factory=lambda: cliente,
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["sucessos"] == 1
+    enviados = [chamada[1][1] for chamada in cliente.chamadas if chamada[0] == "atualizar_pagina"]
+    assert enviados[0]["Status"] == {"status": {"name": "Feito"}}
+    assert enviados[0]["Nome"]["title"][0]["text"]["content"] == "nota nova"
+
+
 def test_editar_bloco_atualiza():
     client = FakeClient()
     codigo, saida = _executar(["--json", "editar-bloco", "b1", "## Novo"], client=client)
@@ -867,6 +1034,14 @@ def test_guia_lista_todos_os_comandos():
     assert {"listar", "conteudo", "exemplo", "linhas", "apagar-bloco", "guia"} <= comandos
     # Cada comando traz ao menos um exemplo.
     assert all(c["exemplos"] for c in saida["dados"]["comandos"])
+
+
+def test_guia_documenta_lote_de_criar_e_editar_linha():
+    codigo, saida = _executar(["--json", "guia"])
+    assert codigo == 0
+    exemplos = {item["comando"]: item["exemplos"] for item in saida["dados"]["comandos"]}
+    assert any("--arquivo" in exemplo for exemplo in exemplos["criar"])
+    assert any("--arquivo" in exemplo for exemplo in exemplos["editar-linha"])
 
 
 def test_guia_recomenda_propriedades_antes_do_conteudo():

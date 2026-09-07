@@ -565,3 +565,31 @@ perfis e nenhum perfil ativo antes de verificar o aviso de credencial.
 
 **Validação:** o teste focado e os 8 testes de `test_cli_unificada.py` passaram,
 `ruff check .` passou e o gate completo teve **203 passed, 2 skipped**.
+
+## [2026-09-07] Lote para criar e editar linhas numa única execução
+
+Uma sessão com operações em centenas de linhas mostrou que chamar `criar` ou
+`editar-linha` repetidamente pagava o custo de inicialização/importação do CLI a
+cada linha. A CLI agora aceita `--arquivo` em ambos os comandos, com JSON ou
+CSV, mantendo a forma individual compatível.
+
+O JSON usa `page_id` (ou `id`) para edição e `nome` (ou `titulo`) para criação;
+`propriedades`/`set` substitui valores e `append`/`acrescentos` acrescenta texto.
+No CSV, a primeira coluna de identificação pode ser `page_id` ou `nome`, as
+demais viram propriedades e o prefixo `append:` representa acréscimos. O
+parser reaproveita a sintaxe de `Nome=valor`, lê o arquivo uma vez e rejeita
+misturas ambíguas entre `--arquivo` e os argumentos da forma individual.
+
+Cada entrada é processada no mesmo processo. Edições reutilizam um único
+`NotionClient`; criações reutilizam um único `TaskList` e, quando necessário,
+um único cliente para completar propriedades. Uma falha de validação ou API
+fica no resultado da própria linha e não interrompe as seguintes. Se a criação
+da página já ocorreu e o preenchimento posterior falha, o estado é
+`pendente` e o ID criado é preservado para retomada. O envelope final informa
+`total`, `processados`, `sucessos`, `erros`, `pendentes` e o resultado de cada
+linha; o progresso periódico vai para `stderr`, mantendo o JSON de `stdout`
+válido.
+
+**Validação:** **207 testes passaram e 2 foram pulados**, `ruff check .` limpo;
+testes novos cobrem reutilização de fábrica, continuidade após erro, criação
+parcial, JSON, CSV com `append` e documentação no `guia`.

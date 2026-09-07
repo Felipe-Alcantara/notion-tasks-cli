@@ -7,10 +7,11 @@ services compartilhados com API/MCP. Não monta payload cru do Notion.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -176,7 +177,25 @@ def _formatar_guia(dados: dict[str, Any]) -> str:
     return "\n".join(linhas)
 
 
+def _formatar_lote(dados: dict[str, Any]) -> str:
+    """Resume um lote sem esconder a situação de nenhuma linha."""
+
+    linhas = [
+        f"Lote: {dados['total']} | sucessos: {dados['sucessos']} | "
+        f"erros: {dados['erros']} | pendentes: {dados['pendentes']}"
+    ]
+    for item in dados["resultados"]:
+        referencia = item.get("page_id") or item.get("nome") or f"linha {item['indice']}"
+        estado = item["estado"].upper()
+        mensagem = (item.get("erro") or {}).get("mensagem")
+        sufixo = f": {mensagem}" if mensagem else ""
+        linhas.append(f"{estado:<9} {item['indice']} ({referencia}){sufixo}")
+    return "\n".join(linhas)
+
+
 def _formatar_humano(comando: str, dados: Any) -> str:
+    if isinstance(dados, dict) and dados.get("modo") == "lote":
+        return _formatar_lote(dados)
     if comando == "guia":
         return _formatar_guia(dados)
     if comando in {"listar", "ler", "criar", "editar", "mover", "concluir"}:
@@ -380,6 +399,30 @@ def cmd_criar(
     Quando ``--status`` é usado, valida o valor contra as opções do modelo de
     tarefas antes de enviar, evitando ``Invalid status option`` da API.
     """
+    arquivo = _argumento_arquivo_lote(args)
+    if arquivo:
+        conflitos = {
+            "nome": getattr(args, "nome", None),
+            "--status": getattr(args, "status", None),
+            "--prazo": getattr(args, "prazo", None),
+            "--duracao": getattr(args, "duracao", None),
+            "--area": getattr(args, "area", None),
+            "--set": getattr(args, "set", None),
+            "--conteudo": getattr(args, "conteudo", None),
+        }
+        presentes = [nome for nome, valor in conflitos.items() if _argumento_presente(valor)]
+        if presentes:
+            raise CLIError(
+                "Não misture --arquivo com os argumentos de uma criação individual: "
+                + ", ".join(presentes)
+            )
+        return _cmd_criar_lote(
+            arquivo,
+            tasklist_factory=tasklist_factory,
+            client_factory=client_factory,
+            progresso_a_cada=getattr(args, "progresso_a_cada", 10),
+        )
+
     tasklist = tasklist_factory()
 
     # Validar status contra opções disponíveis (se fornecido)
@@ -702,7 +745,443 @@ def _pares_chave_valor(itens: Sequence[str] | None, flag: str) -> dict[str, str]
     return pares
 
 
+def _argumento_presente(valor: Any) -> bool:
+    """Indica se um argumento real foi informado, sem confiar em ``Mock``."""
+
+    if isinstance(valor, str):
+        return bool(valor.strip())
+    if isinstance(valor, os.PathLike):
+        convertido = os.fspath(valor)
+        return bool(convertido) if isinstance(convertido, str) else bool(convertido)
+    if isinstance(valor, Sequence) and not isinstance(valor, (str, bytes, bytearray)):
+        return bool(valor)
+    return False
+
+
+def _argumento_arquivo_lote(args: argparse.Namespace) -> str | None:
+    """Lê ``--arquivo`` sem transformar atributos automáticos de ``Mock`` em caminho."""
+
+    valor = getattr(args, "arquivo", None)
+    if isinstance(valor, str):
+        return _normalizar_texto(valor)
+    if isinstance(valor, os.PathLike):
+        convertido = os.fspath(valor)
+        if isinstance(convertido, bytes):
+            convertido = os.fsdecode(convertido)
+        return _normalizar_texto(convertido)
+    return None
+
+
+def _valor_texto_lote(valor: Any, *, nome: str, indice: int) -> str:
+    """Converte valor JSON/CSV para a sintaxe textual já usada por ``--set``."""
+
+    if valor is None:
+        return ""
+    if isinstance(valor, bool):
+        return "true" if valor else "false"
+    if isinstance(valor, (list, tuple)):
+        return ",".join(
+            _valor_texto_lote(item, nome=nome, indice=indice) for item in valor
+        )
+    if isinstance(valor, Mapping):
+        raise CLIError(
+            f"Linha {indice}: o valor da propriedade '{nome}' deve ser texto, "
+            "número, booleano ou lista — objeto aninhado não é aceito."
+        )
+    return str(valor)
+
+
+def _pares_lote(valor: Any, *, campo: str, indice: int) -> dict[str, str]:
+    """Normaliza um mapa/lista de propriedades pelo mesmo parser de ``--set``."""
+
+    if valor is None:
+        return {}
+    if isinstance(valor, Mapping):
+        itens = [
+            f"{nome}={_valor_texto_lote(conteudo, nome=str(nome), indice=indice)}"
+            for nome, conteudo in valor.items()
+        ]
+    elif isinstance(valor, str):
+        itens = [valor]
+    elif isinstance(valor, Sequence) and not isinstance(valor, (bytes, bytearray)):
+        itens = []
+        for item in valor:
+            if not isinstance(item, str):
+                raise CLIError(
+                    f"Linha {indice}: '{campo}' em formato de lista deve conter "
+                    "itens no formato Nome=valor."
+                )
+            itens.append(item)
+    else:
+        raise CLIError(
+            f"Linha {indice}: '{campo}' deve ser um objeto de propriedades ou "
+            "uma lista de itens Nome=valor."
+        )
+    return _pares_chave_valor(itens, f"{campo} da linha {indice}")
+
+
+def _campo_lote(item: Mapping[str, Any], nomes: Sequence[str]) -> Any:
+    """Obtém o primeiro campo presente, aceitando aliases de entrada."""
+
+    for nome in nomes:
+        if nome in item:
+            return item[nome]
+    return None
+
+
+def _pares_campo_lote(
+    item: Mapping[str, Any], nomes: Sequence[str], *, campo: str, indice: int
+) -> dict[str, str]:
+    """Lê um campo de propriedades e recusa aliases duplicados ambíguos."""
+
+    presentes = [nome for nome in nomes if nome in item]
+    if len(presentes) > 1:
+        nomes_texto = ", ".join(presentes)
+        raise CLIError(f"Linha {indice}: use apenas um entre {nomes_texto}.")
+    return _pares_lote(item[presentes[0]], campo=campo, indice=indice) if presentes else {}
+
+
+def _texto_campo_lote(valor: Any, *, campo: str, indice: int) -> str | None:
+    """Valida texto usado como ID ou título de uma entrada de lote."""
+
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        raise CLIError(f"Linha {indice}: '{campo}' deve ser texto.")
+    return _normalizar_texto(valor)
+
+
+def _normalizar_entrada_lote(
+    item: Any, indice: int, *, criar: bool
+) -> dict[str, Any]:
+    """Valida uma entrada JSON/CSV e devolve dados prontos para o caso de uso."""
+
+    if not isinstance(item, Mapping):
+        raise CLIError(f"Linha {indice}: cada item do lote deve ser um objeto.")
+    if item.get("__erro_lote__"):
+        raise CLIError(f"Linha {indice}: {item['__erro_lote__']}")
+
+    page_id = _texto_campo_lote(
+        _campo_lote(item, ("page_id", "id")), campo="page_id", indice=indice
+    )
+    nome = _texto_campo_lote(
+        _campo_lote(item, ("nome", "titulo")), campo="nome", indice=indice
+    )
+    if criar:
+        nome = _texto_obrigatorio(nome, f"nome da linha {indice}")
+    else:
+        page_id = _texto_obrigatorio(page_id, f"page_id da linha {indice}")
+
+    return {
+        "page_id": page_id,
+        "nome": nome,
+        "valores": _pares_campo_lote(
+            item, ("propriedades", "set"), campo="propriedades", indice=indice
+        ),
+        "acrescentos": _pares_campo_lote(
+            item, ("append", "acrescentos"), campo="append", indice=indice
+        ),
+    }
+
+
+def _ler_csv_lote(caminho: Path) -> list[dict[str, Any]]:
+    """Lê CSV com ``page_id``/``nome`` e demais colunas como propriedades."""
+
+    try:
+        with caminho.open("r", encoding="utf-8-sig", newline="") as arquivo:
+            leitor = csv.DictReader(arquivo)
+            campos = leitor.fieldnames or []
+            nomes = [campo.strip() if isinstance(campo, str) else "" for campo in campos]
+            if not nomes or any(not nome for nome in nomes):
+                raise CLIError("O cabeçalho do CSV de lote não pode ser vazio.")
+            if len({nome.casefold() for nome in nomes}) != len(nomes):
+                raise CLIError("O cabeçalho do CSV de lote não pode repetir colunas.")
+
+            entradas: list[dict[str, Any]] = []
+            for _linha_numero, linha in enumerate(leitor, start=2):
+                entrada: dict[str, Any] = {}
+                propriedades: dict[str, str] = {}
+                acrescentos: dict[str, str] = {}
+                erros: list[str] = []
+                for campo, valor in linha.items():
+                    if campo is None:
+                        if valor:
+                            erros.append("há valores depois da última coluna")
+                        continue
+                    nome = str(campo).strip()
+                    texto = "" if valor is None else valor
+                    chave = nome.casefold()
+                    if chave in {"page_id", "id"}:
+                        entrada["page_id"] = texto
+                    elif chave in {"nome", "titulo"}:
+                        entrada["nome"] = texto
+                    elif chave.startswith("append:"):
+                        coluna = nome.split(":", 1)[1].strip()
+                        if coluna:
+                            acrescentos[coluna] = texto
+                        else:
+                            erros.append("a coluna append: precisa informar o nome da propriedade")
+                    else:
+                        propriedades[nome] = texto
+                if propriedades:
+                    entrada["propriedades"] = propriedades
+                if acrescentos:
+                    entrada["append"] = acrescentos
+                if erros:
+                    entrada["__erro_lote__"] = "; ".join(erros)
+                entradas.append(entrada)
+            if not entradas:
+                raise CLIError(f"O CSV de lote '{caminho}' não contém nenhuma linha.")
+            return entradas
+    except OSError as erro:
+        raise CLIError(f"Não foi possível ler o CSV de lote '{caminho}': {erro}") from erro
+    except UnicodeError as erro:
+        raise CLIError(f"Não foi possível ler o CSV de lote '{caminho}': {erro}") from erro
+    except csv.Error as erro:
+        raise CLIError(f"CSV de lote inválido '{caminho}': {erro}") from erro
+
+
+def _ler_arquivo_lote(caminho_texto: str) -> tuple[Path, list[Any]]:
+    """Lê uma lista de entradas JSON ou CSV uma única vez."""
+
+    caminho = Path(caminho_texto).expanduser()
+    if not caminho.is_file():
+        raise CLIError(f"Arquivo de lote não encontrado: {caminho}")
+    if caminho.suffix.casefold() == ".csv":
+        return caminho, _ler_csv_lote(caminho)
+
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8-sig"))
+    except UnicodeError as erro:
+        raise CLIError(f"Não foi possível ler o arquivo de lote '{caminho}': {erro}") from erro
+    except json.JSONDecodeError as erro:
+        raise CLIError(f"JSON de lote inválido '{caminho}': {erro.msg}") from erro
+    except OSError as erro:
+        raise CLIError(f"Não foi possível ler o arquivo de lote '{caminho}': {erro}") from erro
+
+    if isinstance(dados, Mapping):
+        for chave in ("linhas", "itens"):
+            if chave in dados:
+                dados = dados[chave]
+                break
+    if not isinstance(dados, list) or not dados:
+        raise CLIError(
+            f"O arquivo de lote '{caminho}' deve conter uma lista não vazia "
+            "(ou um objeto com a chave 'linhas')."
+        )
+    return caminho, dados
+
+
+def _referencia_entrada_lote(item: Any, *, criar: bool) -> dict[str, str]:
+    """Extrai referência segura para o relatório quando a entrada falha."""
+
+    if not isinstance(item, Mapping):
+        return {}
+    if criar:
+        valor = _campo_lote(item, ("nome", "titulo"))
+        return {"nome": valor.strip()} if isinstance(valor, str) and valor.strip() else {}
+    valor = _campo_lote(item, ("page_id", "id"))
+    return {"page_id": valor.strip()} if isinstance(valor, str) and valor.strip() else {}
+
+
+def _mensagem_erro_lote(erro: Exception) -> str:
+    """Converte falhas de rede/configuração para a mesma mensagem da CLI unitária."""
+
+    if isinstance(erro, NotionConfigurationError):
+        return "Configuração do Notion inválida."
+    if isinstance(erro, NotionAPIError):
+        return _mensagem_erro_notion(erro)
+    return str(erro).strip() or type(erro).__name__
+
+
+def _resultado_lote(
+    indice: int,
+    estado: str,
+    *,
+    page_id: str | None = None,
+    nome: str | None = None,
+    dados: Any = None,
+    erro: Exception | None = None,
+) -> dict[str, Any]:
+    """Cria o registro estável de uma linha processada."""
+
+    resultado: dict[str, Any] = {
+        "indice": indice,
+        "estado": estado,
+        "ok": estado == "sucesso",
+    }
+    if page_id is not None:
+        resultado["page_id"] = page_id
+    if nome is not None:
+        resultado["nome"] = nome
+    if dados is not None:
+        resultado["dados"] = dados
+    if erro is not None:
+        resultado["erro"] = {"mensagem": _mensagem_erro_lote(erro)}
+    return resultado
+
+
+def _resumo_lote(
+    comando: str, caminho: Path, resultados: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Monta o resumo final do lote."""
+
+    return {
+        "modo": "lote",
+        "comando": comando,
+        "arquivo": str(caminho),
+        "total": len(resultados),
+        "processados": len(resultados),
+        "sucessos": sum(item["estado"] == "sucesso" for item in resultados),
+        "erros": sum(item["estado"] == "erro" for item in resultados),
+        "pendentes": sum(item["estado"] == "pendente" for item in resultados),
+        "resultados": resultados,
+    }
+
+
+def _emitir_progresso_lote(
+    indice: int,
+    total: int,
+    resultados: Sequence[dict[str, Any]],
+    progresso_a_cada: int,
+) -> None:
+    """Emite progresso em stderr, preservando JSON válido em stdout."""
+
+    if indice % progresso_a_cada and indice != total:
+        return
+    sucessos = sum(item["estado"] == "sucesso" for item in resultados)
+    erros = sum(item["estado"] == "erro" for item in resultados)
+    pendentes = sum(item["estado"] == "pendente" for item in resultados)
+    print(
+        f"[lote] {indice}/{total} | sucessos: {sucessos} | "
+        f"erros: {erros} | pendentes: {pendentes}",
+        file=sys.stderr,
+    )
+
+
+def _progresso_lote(valor: Any) -> int:
+    """Valida o intervalo de progresso informado pelo usuário."""
+
+    if isinstance(valor, bool) or not isinstance(valor, int) or valor < 1:
+        raise CLIError("'--progresso-a-cada' deve ser um inteiro maior que zero.")
+    return valor
+
+
+def _cmd_editar_linha_lote(
+    caminho_texto: str, *, client_factory: ClientFactory, progresso_a_cada: Any
+) -> dict[str, Any]:
+    """Edita várias linhas mantendo o cliente dentro da mesma execução."""
+
+    caminho, entradas = _ler_arquivo_lote(caminho_texto)
+    intervalo = _progresso_lote(progresso_a_cada)
+    resultados: list[dict[str, Any]] = []
+    cliente: NotionClient | None = None
+
+    for indice, item in enumerate(entradas, start=1):
+        referencia = _referencia_entrada_lote(item, criar=False)
+        try:
+            entrada = _normalizar_entrada_lote(item, indice, criar=False)
+            if cliente is None:
+                cliente = client_factory()
+            dados = svc_propriedades.editar_linha(
+                entrada["page_id"],
+                entrada["valores"],
+                entrada["acrescentos"],
+                cliente=cliente,
+            )
+            resultado = _resultado_lote(
+                indice,
+                "sucesso",
+                page_id=entrada["page_id"],
+                dados=dados,
+            )
+        except Exception as erro:  # noqa: BLE001 - o lote continua nas demais linhas
+            resultado = _resultado_lote(indice, "erro", erro=erro, **referencia)
+        resultados.append(resultado)
+        _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+
+    return _resumo_lote("editar-linha", caminho, resultados)
+
+
+def _cmd_criar_lote(
+    caminho_texto: str,
+    *,
+    tasklist_factory: TaskListFactory,
+    client_factory: ClientFactory,
+    progresso_a_cada: Any,
+) -> dict[str, Any]:
+    """Cria várias linhas e completa as propriedades com um cliente reutilizado."""
+
+    caminho, entradas = _ler_arquivo_lote(caminho_texto)
+    intervalo = _progresso_lote(progresso_a_cada)
+    resultados: list[dict[str, Any]] = []
+    tasklist: TaskList | None = None
+    cliente: NotionClient | None = None
+
+    for indice, item in enumerate(entradas, start=1):
+        referencia = _referencia_entrada_lote(item, criar=True)
+        dados_criados: dict[str, Any] | None = None
+        try:
+            entrada = _normalizar_entrada_lote(item, indice, criar=True)
+            if tasklist is None:
+                tasklist = tasklist_factory()
+            tarefa = svc.criar_tarefa(entrada["nome"], tasklist=tasklist)
+            dados_criados = _tarefa_dict(tarefa)
+            page_id = _texto_obrigatorio(dados_criados.get("id"), f"id criado na linha {indice}")
+            if entrada["valores"] or entrada["acrescentos"]:
+                if cliente is None:
+                    cliente = client_factory()
+                dados_criados["propriedades"] = svc_propriedades.editar_linha(
+                    page_id,
+                    entrada["valores"],
+                    entrada["acrescentos"],
+                    cliente=cliente,
+                )["atualizadas"]
+            resultado = _resultado_lote(
+                indice,
+                "sucesso",
+                page_id=page_id,
+                nome=entrada["nome"],
+                dados=dados_criados,
+            )
+        except Exception as erro:  # noqa: BLE001 - uma linha não interrompe o lote
+            if dados_criados is not None and dados_criados.get("id"):
+                resultado = _resultado_lote(
+                    indice,
+                    "pendente",
+                    page_id=str(dados_criados["id"]),
+                    nome=str(dados_criados.get("nome") or referencia.get("nome") or ""),
+                    dados=dados_criados,
+                    erro=erro,
+                )
+            else:
+                resultado = _resultado_lote(indice, "erro", erro=erro, **referencia)
+        resultados.append(resultado)
+        _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+
+    return _resumo_lote("criar", caminho, resultados)
+
+
 def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    arquivo = _argumento_arquivo_lote(args)
+    if arquivo:
+        conflitos = {
+            "page_id": getattr(args, "page_id", None),
+            "--set": getattr(args, "set", None),
+            "--append": getattr(args, "append", None),
+        }
+        presentes = [nome for nome, valor in conflitos.items() if _argumento_presente(valor)]
+        if presentes:
+            raise CLIError(
+                "Não misture --arquivo com os argumentos de uma edição individual: "
+                + ", ".join(presentes)
+            )
+        return _cmd_editar_linha_lote(
+            arquivo,
+            client_factory=client_factory,
+            progresso_a_cada=getattr(args, "progresso_a_cada", 10),
+        )
+
     page_id = _texto_obrigatorio(args.page_id, "page_id")
     valores = _pares_chave_valor(args.set, "--set")
     acrescentos = _pares_chave_valor(args.append, "--append")
@@ -1421,6 +1900,7 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         'python -m cli --json criar "Nova tarefa" --status "Entrada" --duracao "Dias"',
         'python -m cli --json criar "Nova tarefa" --status "Entrada" '
         '--set "Prioridade=Alta" --conteudo $\'## Contexto\\n\\nDetalhes...\'',
+        "python -m cli --json criar --arquivo novas-linhas.json --progresso-a-cada 25",
     ],
     "editar": ['python -m cli --json editar <task_id> --status "Concluída"'],
     "mover": ['python -m cli --json mover <task_id> "Concluída"'],
@@ -1444,6 +1924,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         '--set "Tags=urgente,casa"',
         'python -m cli --json editar-linha <page_id> --append '
         '"Resumo=\\n\\nNova observação ao final"',
+        "python -m cli --json editar-linha --arquivo atualizacoes.json "
+        "--progresso-a-cada 25",
     ],
     "blocos": ["python -m cli --json blocos <page_id>"],
     "escrever": [
@@ -1605,6 +2087,8 @@ def cmd_guia(args: argparse.Namespace) -> Any:
             "PRIMEIRO as propriedades (as colunas) e SÓ DEPOIS o conteúdo (o corpo).",
             "1. Propriedades (colunas: status, datas, seleções, relações…) → "
             "'editar-linha <page_id> --set \"Nome=valor\"'.",
+            "Para muitas linhas, use 'criar --arquivo' ou 'editar-linha --arquivo': "
+            "uma chamada processa o lote e relata cada entrada sem interromper as demais.",
             "2. Conteúdo (o corpo da nota, em blocos) → 'escrever <page_id> <markdown>'.",
             "Não pare no conteúdo esquecendo as propriedades: uma linha de database "
             "só fica completa quando as colunas também são preenchidas.",
@@ -1641,7 +2125,7 @@ def construir_parser() -> argparse.ArgumentParser:
     criar = sub.add_parser(
         "criar", help="cria uma linha no database atual (tarefas ou schema genérico)"
     )
-    criar.add_argument("nome")
+    criar.add_argument("nome", nargs="?")
     criar.add_argument("--status")
     criar.add_argument("--prazo")
     criar.add_argument("--duracao")
@@ -1658,6 +2142,18 @@ def construir_parser() -> argparse.ArgumentParser:
         "--conteudo",
         help="Markdown do corpo da linha, escrito logo após as propriedades — "
         "fecha criar + editar-linha + escrever numa chamada só",
+    )
+    criar.add_argument(
+        "--arquivo",
+        metavar="ARQUIVO",
+        help="cria várias linhas a partir de JSON/CSV; JSON usa itens com nome e propriedades",
+    )
+    criar.add_argument(
+        "--progresso-a-cada",
+        type=int,
+        default=10,
+        metavar="N",
+        help="no modo --arquivo, informa progresso a cada N linhas (padrão: 10)",
     )
 
     editar = sub.add_parser("editar", help="edita uma tarefa")
@@ -1735,7 +2231,7 @@ def construir_parser() -> argparse.ArgumentParser:
         help="edita propriedades (colunas) de uma linha de database — faça ISTO "
         "antes de escrever o conteúdo",
     )
-    editar_linha.add_argument("page_id")
+    editar_linha.add_argument("page_id", nargs="?")
     editar_linha.add_argument(
         "--set",
         action="append",
@@ -1751,6 +2247,18 @@ def construir_parser() -> argparse.ArgumentParser:
         help='acrescenta texto ao FINAL de uma coluna de texto (title/rich_text), '
         'preservando o conteúdo atual. Ex.: --append "Resumo=\\n\\nMais uma nota". '
         "Texto longo é fatiado automaticamente no limite de 2000.",
+    )
+    editar_linha.add_argument(
+        "--arquivo",
+        metavar="ARQUIVO",
+        help="edita várias linhas a partir de JSON/CSV; JSON usa page_id e propriedades",
+    )
+    editar_linha.add_argument(
+        "--progresso-a-cada",
+        type=int,
+        default=10,
+        metavar="N",
+        help="no modo --arquivo, informa progresso a cada N linhas (padrão: 10)",
     )
 
     blocos = sub.add_parser(
