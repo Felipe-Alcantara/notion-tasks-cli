@@ -51,6 +51,7 @@ from services import conteudo as svc_conteudo  # noqa: E402
 from services import estrutura_projeto as svc_estrutura  # noqa: E402
 from services import inventario_github as svc_inventario  # noqa: E402
 from services import normalizacao as svc_normalizacao  # noqa: E402
+from services import preflight as svc_preflight  # noqa: E402
 from services import propriedades as svc_propriedades  # noqa: E402
 from services import reordenacao as svc_reordenacao  # noqa: E402
 from services import schema as svc_schema  # noqa: E402
@@ -100,6 +101,85 @@ def _lista_csv(valores: Sequence[str] | None) -> list[str] | None:
     for valor in valores:
         itens.extend(item.strip() for item in valor.split(",") if item.strip())
     return itens
+
+
+def _database_id_tasklist(tasklist: Any) -> str | None:
+    """Obtém o database do ``TaskList`` sem exigir esse detalhe aos doubles."""
+
+    for atributo in ("_database_id", "database_id"):
+        valor = getattr(tasklist, atributo, None)
+        if isinstance(valor, str) and valor.strip():
+            return valor.strip()
+    return None
+
+
+def _cliente_tasklist(tasklist: Any, client_factory: ClientFactory) -> NotionClient:
+    """Reutiliza o cliente interno do ``TaskList`` quando ele existe."""
+
+    cliente = getattr(tasklist, "_client", None)
+    if cliente is not None:
+        return cliente
+    return client_factory()
+
+
+def _preflight_necessario(
+    valores: Mapping[str, str], *, estrito: bool, dry_run: bool = False
+) -> bool:
+    """Decide quando vale abrir a leitura adicional do contrato de projeto."""
+
+    if estrito or dry_run:
+        return True
+    nomes = {str(chave).casefold() for chave in valores}
+    return bool(
+        nomes
+        & {
+            svc_preflight.COLUNA_PROJETO.casefold(),
+            svc_preflight.COLUNA_URL_REFERENCIA.casefold(),
+        }
+    )
+
+
+def _preflight_dict(resultado: svc_preflight.ResultadoPreflight) -> dict[str, Any]:
+    """Mantém o retorno do preflight estável e serializável."""
+
+    return resultado.para_dict()
+
+
+def _aplicar_relacao_preflight(
+    page_id: str,
+    resultado: svc_preflight.ResultadoPreflight,
+    *,
+    cliente: NotionClient,
+) -> dict[str, Any] | None:
+    """Corrige a relation planejada e confirma o estado final por releitura."""
+
+    if resultado.projeto is None or resultado.coluna_relacao is None:
+        return None
+    coluna = resultado.coluna_relacao
+    for antigo in resultado.remover_relacoes:
+        svc_relacoes.relacionar(
+            page_id,
+            antigo,
+            coluna,
+            desfazer=True,
+            cliente=cliente,
+        )
+    relacao = svc_relacoes.relacionar(
+        page_id,
+        resultado.projeto.id,
+        coluna,
+        cliente=cliente,
+    )
+    pagina = cliente.obter_pagina(page_id)
+    propriedades = pagina.get("properties") or {}
+    ids = svc_preflight.ids_relacao(propriedades.get(coluna))
+    esperado = resultado.projeto.id.replace("-", "").casefold()
+    if not any(item.replace("-", "").casefold() == esperado for item in ids):
+        raise ValueError(
+            f"A relation '{coluna}' não confirmou o projeto {resultado.projeto.id} "
+            f"na linha {page_id}; releia a linha antes de tentar outra criação."
+        )
+    return relacao
 
 
 def _tarefa_dict(tarefa: Any) -> dict[str, Any]:
@@ -400,6 +480,8 @@ def cmd_criar(
     tarefas antes de enviar, evitando ``Invalid status option`` da API.
     """
     arquivo = _argumento_arquivo_lote(args)
+    estrito = getattr(args, "strict", False) is True
+    dry_run = getattr(args, "dry_run", False) is True
     if arquivo:
         conflitos = {
             "nome": getattr(args, "nome", None),
@@ -421,8 +503,11 @@ def cmd_criar(
             tasklist_factory=tasklist_factory,
             client_factory=client_factory,
             progresso_a_cada=getattr(args, "progresso_a_cada", 10),
+            estrito=estrito,
+            dry_run=dry_run,
         )
 
+    nome = _texto_obrigatorio(args.nome, "nome")
     tasklist = tasklist_factory()
 
     # Validar status contra opções disponíveis (se fornecido)
@@ -435,8 +520,35 @@ def cmd_criar(
                 f"Status '{status}' inválido. Opções disponíveis: {', '.join(status_validos)}"
             )
 
+    extras = _pares_chave_valor(getattr(args, "set", None), "--set")
+    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    cliente: NotionClient | None = None
+    preflight: svc_preflight.ResultadoPreflight | None = None
+    if _preflight_necessario(extras, estrito=estrito, dry_run=dry_run):
+        cliente = _cliente_tasklist(tasklist, client_factory)
+        preflight = svc_preflight.preflight_criar(
+            nome,
+            extras,
+            cliente=cliente,
+            database_id=_database_id_tasklist(tasklist),
+            estrito=estrito,
+        )
+        extras = preflight.valores
+
+    if dry_run:
+        dados_dry_run: dict[str, Any] = {
+            "nome": nome,
+            "dry_run": True,
+            "escrever": False,
+            "propriedades_planejadas": dict(extras),
+            "conteudo_planejado": bool(conteudo),
+        }
+        if preflight is not None:
+            dados_dry_run["preflight"] = _preflight_dict(preflight)
+        return dados_dry_run
+
     tarefa = svc.criar_tarefa(
-        _texto_obrigatorio(args.nome, "nome"),
+        nome,
         status=status,
         prazo=_normalizar_texto(args.prazo),
         duracao=_normalizar_texto(args.duracao),
@@ -449,23 +561,30 @@ def cmd_criar(
     # id junto, para quem chamou poder completar a linha em vez de criar outra —
     # um script que estoura aqui sem saber o id deixa órfã no database.
     page_id = dados.get("id", "")
-    extras = _pares_chave_valor(getattr(args, "set", None), "--set")
-    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
-    if not extras and not conteudo:
+    if not extras and not conteudo and preflight is None:
         return dados
 
     try:
         if extras:
+            cliente = cliente or client_factory()
             dados["propriedades"] = svc_propriedades.editar_linha(
-                page_id, extras, cliente=client_factory()
+                page_id, extras, cliente=cliente
             )["atualizadas"]
+        if preflight is not None:
+            dados["preflight"] = _preflight_dict(preflight)
+            if preflight.projeto is not None:
+                cliente = cliente or client_factory()
+                dados["relacao_projeto"] = _aplicar_relacao_preflight(
+                    page_id, preflight, cliente=cliente
+                )
         if conteudo:
+            cliente = cliente or client_factory()
             escrita = svc_conteudo.escrever_conteudo(
                 page_id,
                 conteudo,
                 # A linha acabou de nascer vazia: não há database dentro dela.
                 mesmo_com_database=True,
-                cliente=client_factory(),
+                cliente=cliente,
             )
             dados["blocos_anexados"] = escrita.anexados
     except Exception as erro:  # noqa: BLE001 - o id precisa sobreviver ao erro
@@ -1035,6 +1154,8 @@ def _resumo_lote(
         "sucessos": sum(item["estado"] == "sucesso" for item in resultados),
         "erros": sum(item["estado"] == "erro" for item in resultados),
         "pendentes": sum(item["estado"] == "pendente" for item in resultados),
+        "planejados": sum(item["estado"] == "planejado" for item in resultados),
+        "bloqueados": sum(item["estado"] == "bloqueado" for item in resultados),
         "resultados": resultados,
     }
 
@@ -1052,9 +1173,10 @@ def _emitir_progresso_lote(
     sucessos = sum(item["estado"] == "sucesso" for item in resultados)
     erros = sum(item["estado"] == "erro" for item in resultados)
     pendentes = sum(item["estado"] == "pendente" for item in resultados)
+    bloqueados = sum(item["estado"] == "bloqueado" for item in resultados)
     print(
         f"[lote] {indice}/{total} | sucessos: {sucessos} | "
-        f"erros: {erros} | pendentes: {pendentes}",
+        f"erros: {erros} | pendentes: {pendentes} | bloqueados: {bloqueados}",
         file=sys.stderr,
     )
 
@@ -1067,8 +1189,45 @@ def _progresso_lote(valor: Any) -> int:
     return valor
 
 
+def _planejar_edicoes_lote(
+    entradas: Sequence[Any],
+    *,
+    cliente: NotionClient,
+    estrito: bool,
+) -> tuple[
+    dict[int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]],
+    dict[int, tuple[dict[str, str], Exception]],
+]:
+    """Executa todos os preflights antes de um lote estrito ou simulado."""
+
+    planos: dict[
+        int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]
+    ] = {}
+    falhas: dict[int, tuple[dict[str, str], Exception]] = {}
+    for indice, item in enumerate(entradas, start=1):
+        referencia = _referencia_entrada_lote(item, criar=False)
+        try:
+            entrada = _normalizar_entrada_lote(item, indice, criar=False)
+            preflight = svc_preflight.preflight_editar(
+                entrada["page_id"],
+                entrada["valores"],
+                entrada["acrescentos"],
+                cliente=cliente,
+                estrito=estrito,
+            )
+            planos[indice] = (entrada, preflight, preflight.valores)
+        except Exception as erro:  # noqa: BLE001 - o lote acumula falhas para não escrever parcialmente
+            falhas[indice] = (referencia, erro)
+    return planos, falhas
+
+
 def _cmd_editar_linha_lote(
-    caminho_texto: str, *, client_factory: ClientFactory, progresso_a_cada: Any
+    caminho_texto: str,
+    *,
+    client_factory: ClientFactory,
+    progresso_a_cada: Any,
+    estrito: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Edita várias linhas mantendo o cliente dentro da mesma execução."""
 
@@ -1076,22 +1235,111 @@ def _cmd_editar_linha_lote(
     intervalo = _progresso_lote(progresso_a_cada)
     resultados: list[dict[str, Any]] = []
     cliente: NotionClient | None = None
+    planos: dict[
+        int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]
+    ] = {}
+
+    if estrito or dry_run:
+        cliente = client_factory()
+        planos, falhas = _planejar_edicoes_lote(
+            entradas, cliente=cliente, estrito=estrito
+        )
+        if dry_run or falhas:
+            for indice, _item in enumerate(entradas, start=1):
+                if indice in falhas:
+                    referencia, erro = falhas[indice]
+                    resultado = _resultado_lote(indice, "erro", erro=erro, **referencia)
+                else:
+                    entrada, preflight, valores = planos[indice]
+                    if dry_run:
+                        dados = {
+                            "id": entrada["page_id"],
+                            "dry_run": True,
+                            "escrever": False,
+                            "propriedades_planejadas": dict(valores),
+                            "acrescimos_planejados": dict(entrada["acrescentos"]),
+                            "preflight": _preflight_dict(preflight),
+                        }
+                        estado = "planejado"
+                    else:
+                        dados = {"preflight": _preflight_dict(preflight)}
+                        erro_bloqueio = CLIError(
+                            "Lote não escrito: --strict encontrou uma entrada inválida "
+                            "e bloqueou todas as alterações para evitar escrita parcial."
+                        )
+                        estado = "bloqueado"
+                        resultado = _resultado_lote(
+                            indice,
+                            estado,
+                            page_id=entrada["page_id"],
+                            dados=dados,
+                            erro=erro_bloqueio,
+                        )
+                        resultados.append(resultado)
+                        _emitir_progresso_lote(
+                            indice, len(entradas), resultados, intervalo
+                        )
+                        continue
+                    resultado = _resultado_lote(
+                        indice,
+                        estado,
+                        page_id=entrada["page_id"],
+                        dados=dados,
+                    )
+                resultados.append(resultado)
+                _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+            return _resumo_lote("editar-linha", caminho, resultados)
 
     for indice, item in enumerate(entradas, start=1):
         referencia = _referencia_entrada_lote(item, criar=False)
         try:
-            entrada = _normalizar_entrada_lote(item, indice, criar=False)
+            if indice in planos:
+                entrada, preflight, valores = planos[indice]
+            else:
+                entrada = _normalizar_entrada_lote(item, indice, criar=False)
+                preflight = None
+                valores = entrada["valores"]
             if cliente is None:
                 cliente = client_factory()
-            dados = svc_propriedades.editar_linha(
-                entrada["page_id"],
-                entrada["valores"],
-                entrada["acrescentos"],
-                cliente=cliente,
-            )
+            if preflight is None and _preflight_necessario(
+                valores, estrito=estrito, dry_run=dry_run
+            ):
+                preflight = svc_preflight.preflight_editar(
+                    entrada["page_id"],
+                    valores,
+                    entrada["acrescentos"],
+                    cliente=cliente,
+                    estrito=estrito,
+                )
+                valores = preflight.valores
+            if dry_run:
+                dados = {
+                    "id": entrada["page_id"],
+                    "dry_run": True,
+                    "escrever": False,
+                    "propriedades_planejadas": dict(valores),
+                    "acrescimos_planejados": dict(entrada["acrescentos"]),
+                }
+                if preflight is not None:
+                    dados["preflight"] = _preflight_dict(preflight)
+                estado = "planejado"
+            else:
+                dados = svc_propriedades.editar_linha(
+                    entrada["page_id"],
+                    valores,
+                    entrada["acrescentos"],
+                    cliente=cliente,
+                )
+                if preflight is not None:
+                    dados["preflight"] = _preflight_dict(preflight)
+                    if preflight.projeto is not None:
+                        dados["relacao_projeto"] = _aplicar_relacao_preflight(
+                            entrada["page_id"], preflight, cliente=cliente
+                        )
+                estado = "sucesso"
             resultado = _resultado_lote(
                 indice,
-                "sucesso",
+                estado,
                 page_id=entrada["page_id"],
                 dados=dados,
             )
@@ -1103,12 +1351,47 @@ def _cmd_editar_linha_lote(
     return _resumo_lote("editar-linha", caminho, resultados)
 
 
+def _planejar_criacoes_lote(
+    entradas: Sequence[Any],
+    *,
+    tasklist: Any,
+    cliente: NotionClient,
+    estrito: bool,
+) -> tuple[
+    dict[int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]],
+    dict[int, tuple[dict[str, str], Exception]],
+]:
+    """Executa todos os preflights de criação antes de um lote protegido."""
+
+    planos: dict[
+        int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]
+    ] = {}
+    falhas: dict[int, tuple[dict[str, str], Exception]] = {}
+    for indice, item in enumerate(entradas, start=1):
+        referencia = _referencia_entrada_lote(item, criar=True)
+        try:
+            entrada = _normalizar_entrada_lote(item, indice, criar=True)
+            preflight = svc_preflight.preflight_criar(
+                entrada["nome"],
+                entrada["valores"],
+                cliente=cliente,
+                database_id=_database_id_tasklist(tasklist),
+                estrito=estrito,
+            )
+            planos[indice] = (entrada, preflight, preflight.valores)
+        except Exception as erro:  # noqa: BLE001 - o lote acumula falhas para não escrever parcialmente
+            falhas[indice] = (referencia, erro)
+    return planos, falhas
+
+
 def _cmd_criar_lote(
     caminho_texto: str,
     *,
     tasklist_factory: TaskListFactory,
     client_factory: ClientFactory,
     progresso_a_cada: Any,
+    estrito: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Cria várias linhas e completa as propriedades com um cliente reutilizado."""
 
@@ -1117,26 +1400,122 @@ def _cmd_criar_lote(
     resultados: list[dict[str, Any]] = []
     tasklist: TaskList | None = None
     cliente: NotionClient | None = None
+    planos: dict[
+        int, tuple[dict[str, Any], svc_preflight.ResultadoPreflight, dict[str, str]]
+    ] = {}
+
+    if estrito or dry_run:
+        tasklist = tasklist_factory()
+        cliente = _cliente_tasklist(tasklist, client_factory)
+        planos, falhas = _planejar_criacoes_lote(
+            entradas, tasklist=tasklist, cliente=cliente, estrito=estrito
+        )
+        if dry_run or falhas:
+            for indice, _item in enumerate(entradas, start=1):
+                if indice in falhas:
+                    referencia, erro = falhas[indice]
+                    resultado = _resultado_lote(indice, "erro", erro=erro, **referencia)
+                else:
+                    entrada, preflight, valores = planos[indice]
+                    if dry_run:
+                        dados = {
+                            "nome": entrada["nome"],
+                            "dry_run": True,
+                            "escrever": False,
+                            "propriedades_planejadas": dict(valores),
+                            "preflight": _preflight_dict(preflight),
+                        }
+                        estado = "planejado"
+                    else:
+                        dados = {"preflight": _preflight_dict(preflight)}
+                        erro_bloqueio = CLIError(
+                            "Lote não escrito: --strict encontrou uma entrada inválida "
+                            "e bloqueou todas as criações para evitar escrita parcial."
+                        )
+                        estado = "bloqueado"
+                        resultado = _resultado_lote(
+                            indice,
+                            estado,
+                            nome=entrada["nome"],
+                            dados=dados,
+                            erro=erro_bloqueio,
+                        )
+                        resultados.append(resultado)
+                        _emitir_progresso_lote(
+                            indice, len(entradas), resultados, intervalo
+                        )
+                        continue
+                    resultado = _resultado_lote(
+                        indice,
+                        estado,
+                        nome=entrada["nome"],
+                        dados=dados,
+                    )
+                resultados.append(resultado)
+                _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+            return _resumo_lote("criar", caminho, resultados)
 
     for indice, item in enumerate(entradas, start=1):
         referencia = _referencia_entrada_lote(item, criar=True)
         dados_criados: dict[str, Any] | None = None
         try:
-            entrada = _normalizar_entrada_lote(item, indice, criar=True)
+            if indice in planos:
+                entrada, preflight, valores = planos[indice]
+            else:
+                entrada = _normalizar_entrada_lote(item, indice, criar=True)
+                preflight = None
+                valores = entrada["valores"]
             if tasklist is None:
                 tasklist = tasklist_factory()
+            if preflight is None and _preflight_necessario(
+                valores, estrito=estrito, dry_run=dry_run
+            ):
+                if cliente is None:
+                    cliente = _cliente_tasklist(tasklist, client_factory)
+                preflight = svc_preflight.preflight_criar(
+                    entrada["nome"],
+                    valores,
+                    cliente=cliente,
+                    database_id=_database_id_tasklist(tasklist),
+                    estrito=estrito,
+                )
+                valores = preflight.valores
+            if dry_run:
+                dados_planejados: dict[str, Any] = {
+                    "nome": entrada["nome"],
+                    "dry_run": True,
+                    "escrever": False,
+                    "propriedades_planejadas": dict(valores),
+                }
+                if preflight is not None:
+                    dados_planejados["preflight"] = _preflight_dict(preflight)
+                resultado = _resultado_lote(
+                    indice,
+                    "planejado",
+                    nome=entrada["nome"],
+                    dados=dados_planejados,
+                )
+                resultados.append(resultado)
+                _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+                continue
             tarefa = svc.criar_tarefa(entrada["nome"], tasklist=tasklist)
             dados_criados = _tarefa_dict(tarefa)
             page_id = _texto_obrigatorio(dados_criados.get("id"), f"id criado na linha {indice}")
-            if entrada["valores"] or entrada["acrescentos"]:
+            if valores or entrada["acrescentos"]:
                 if cliente is None:
-                    cliente = client_factory()
+                    cliente = _cliente_tasklist(tasklist, client_factory)
                 dados_criados["propriedades"] = svc_propriedades.editar_linha(
                     page_id,
-                    entrada["valores"],
+                    valores,
                     entrada["acrescentos"],
                     cliente=cliente,
                 )["atualizadas"]
+            if preflight is not None:
+                dados_criados["preflight"] = _preflight_dict(preflight)
+                if preflight.projeto is not None:
+                    dados_criados["relacao_projeto"] = _aplicar_relacao_preflight(
+                        page_id, preflight, cliente=cliente or client_factory()
+                    )
             resultado = _resultado_lote(
                 indice,
                 "sucesso",
@@ -1163,6 +1542,8 @@ def _cmd_criar_lote(
 
 
 def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    estrito = getattr(args, "strict", False) is True
+    dry_run = getattr(args, "dry_run", False) is True
     arquivo = _argumento_arquivo_lote(args)
     if arquivo:
         conflitos = {
@@ -1180,14 +1561,47 @@ def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory)
             arquivo,
             client_factory=client_factory,
             progresso_a_cada=getattr(args, "progresso_a_cada", 10),
+            estrito=estrito,
+            dry_run=dry_run,
         )
 
     page_id = _texto_obrigatorio(args.page_id, "page_id")
     valores = _pares_chave_valor(args.set, "--set")
     acrescentos = _pares_chave_valor(args.append, "--append")
-    return svc_propriedades.editar_linha(
-        page_id, valores, acrescentos, cliente=client_factory()
+    cliente = client_factory()
+    preflight: svc_preflight.ResultadoPreflight | None = None
+    if _preflight_necessario(valores, estrito=estrito, dry_run=dry_run):
+        preflight = svc_preflight.preflight_editar(
+            page_id,
+            valores,
+            acrescentos,
+            cliente=cliente,
+            estrito=estrito,
+        )
+        valores = preflight.valores
+
+    if dry_run:
+        dados_dry_run: dict[str, Any] = {
+            "id": page_id,
+            "dry_run": True,
+            "escrever": False,
+            "propriedades_planejadas": dict(valores),
+            "acrescimos_planejados": dict(acrescentos),
+        }
+        if preflight is not None:
+            dados_dry_run["preflight"] = _preflight_dict(preflight)
+        return dados_dry_run
+
+    dados = svc_propriedades.editar_linha(
+        page_id, valores, acrescentos, cliente=cliente
     )
+    if preflight is not None:
+        dados["preflight"] = _preflight_dict(preflight)
+        if preflight.projeto is not None:
+            dados["relacao_projeto"] = _aplicar_relacao_preflight(
+                page_id, preflight, cliente=cliente
+            )
+    return dados
 
 
 def cmd_blocos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -1900,6 +2314,9 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         'python -m cli --json criar "Nova tarefa" --status "Entrada" --duracao "Dias"',
         'python -m cli --json criar "Nova tarefa" --status "Entrada" '
         '--set "Prioridade=Alta" --conteudo $\'## Contexto\\n\\nDetalhes...\'',
+        'python -m cli --json criar "Projeto/contexto — descrição" '
+        '--set "URL de referência=https://github.com/owner/repo/tree/main" --strict',
+        'python -m cli --json criar --arquivo novas-linhas.json --strict --dry-run',
         "python -m cli --json criar --arquivo novas-linhas.json --progresso-a-cada 25",
     ],
     "editar": ['python -m cli --json editar <task_id> --status "Concluída"'],
@@ -1924,6 +2341,9 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         '--set "Tags=urgente,casa"',
         'python -m cli --json editar-linha <page_id> --append '
         '"Resumo=\\n\\nNova observação ao final"',
+        'python -m cli --json editar-linha <page_id> '
+        '--set "URL de referência=https://github.com/owner/repo" --strict',
+        "python -m cli --json editar-linha --arquivo atualizacoes.json --strict --dry-run",
         "python -m cli --json editar-linha --arquivo atualizacoes.json "
         "--progresso-a-cada 25",
     ],
@@ -2136,7 +2556,8 @@ def construir_parser() -> argparse.ArgumentParser:
         metavar="NOME=VALOR",
         help="preenche QUALQUER outra coluna já na criação (mesma sintaxe de "
         'editar-linha). Ex.: --set "Prioridade=Alta" --set "Projeto=<id1>,<id2>". '
-        "Evita o vaivém criar → editar-linha",
+        "Uma URL em 'URL de referência' resolve Projeto; --strict valida URL, "
+        "relação e o título antes da escrita. Evita o vaivém criar → editar-linha",
     )
     criar.add_argument(
         "--conteudo",
@@ -2147,6 +2568,16 @@ def construir_parser() -> argparse.ArgumentParser:
         "--arquivo",
         metavar="ARQUIVO",
         help="cria várias linhas a partir de JSON/CSV; JSON usa itens com nome e propriedades",
+    )
+    criar.add_argument(
+        "--strict",
+        action="store_true",
+        help="bloqueia URL/Projeto/título inconsistentes antes de qualquer escrita",
+    )
+    criar.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="executa o preflight e mostra o plano sem criar nem editar no Notion",
     )
     criar.add_argument(
         "--progresso-a-cada",
@@ -2238,7 +2669,8 @@ def construir_parser() -> argparse.ArgumentParser:
         metavar="NOME=VALOR",
         help='substitui o valor de uma coluna; repita para várias. Ex.: --set '
         '"Status=Feito" --set "Prazo=2026-07-10". Listas (multi_select/relation) '
-        "aceitam CSV; texto vazio limpa a coluna.",
+        "aceitam CSV; texto vazio limpa a coluna. Uma URL em 'URL de referência' "
+        "resolve Projeto; use --strict para exigir o padrão antes do PATCH.",
     )
     editar_linha.add_argument(
         "--append",
@@ -2252,6 +2684,16 @@ def construir_parser() -> argparse.ArgumentParser:
         "--arquivo",
         metavar="ARQUIVO",
         help="edita várias linhas a partir de JSON/CSV; JSON usa page_id e propriedades",
+    )
+    editar_linha.add_argument(
+        "--strict",
+        action="store_true",
+        help="bloqueia URL/Projeto/título inconsistentes antes de qualquer escrita",
+    )
+    editar_linha.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="executa o preflight e mostra o plano sem editar no Notion",
     )
     editar_linha.add_argument(
         "--progresso-a-cada",

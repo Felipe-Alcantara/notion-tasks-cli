@@ -65,3 +65,19 @@ escrever, reutiliza o cliente e devolve o resultado individual de cada par.
 linhas na mesma execução. O arquivo é lido uma vez, o cliente/TaskList é
 reutilizado, o progresso sai em stderr e o envelope final separa sucessos, erros
 e criações pendentes, sem interromper o lote por uma falha individual.
+
+## Preflight de projetos
+
+`criar` e `editar-linha` aceitam `--strict` e `--dry-run` para o contrato de
+projetos. A URL GitHub é reduzida à identidade `owner/repo` (com suporte a
+`.git`, subcaminho, query e fragmento) e resolvida contra a coluna `URL` da
+database relacionada por `Projeto`. Uma única correspondência é aplicada via
+`relacionar` e confirmada com releitura após o PATCH. Duplicidade, URL não
+encontrada, projeto divergente ou título fora de
+`<projeto>/<contexto> — descrição` bloqueiam antes da escrita em `--strict`.
+
+Sem `--strict`, o modo legado continua aceitando IDs explícitos e tarefas
+pessoais sem URL GitHub/Projeto; uma URL GitHub desconhecida não cria relação e
+é devolvida como aviso. `--dry-run` é somente leitura. Em lotes estritos, todos
+os preflights são executados antes de qualquer criação/edição, evitando escrita
+parcial quando uma entrada falha.

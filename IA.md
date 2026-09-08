@@ -593,3 +593,27 @@ válido.
 **Validação:** **207 testes passaram e 2 foram pulados**, `ruff check .` limpo;
 testes novos cobrem reutilização de fábrica, continuidade após erro, criação
 parcial, JSON, CSV com `append` e documentação no `guia`.
+
+## [2026-09-08] Preflight de projeto por URL no criar/editar-linha
+
+O vínculo entre uma tarefa e a database `GITHUB` passou a poder ser derivado de
+`URL de referência`, em vez de exigir que a IA descubra e informe manualmente o
+ID da relação. `services/preflight.py` normaliza URLs `github.com` para
+`owner/repo`, removendo `.git`, subcaminho, query e fragmento, consulta a coluna
+`URL` da database apontada pelo schema de `Projeto` e só aceita uma linha
+correspondente. Duplicidades são erro explícito; URL desconhecida não inventa
+relação.
+
+`criar` e `editar-linha` aplicam a relação com o serviço `relacionar` e relêem a
+linha para confirmar o ID canônico. Com `--strict`, o preflight ocorre antes de
+qualquer escrita e bloqueia URL/Projeto divergentes, projeto não encontrado e
+títulos fora de `<projeto>/<contexto> — descrição`. Com `--dry-run`, somente o
+plano é devolvido. Em lotes estritos, todas as entradas são pré-validadas antes
+da primeira escrita, evitando criação/edição parcial. A exceção de compatibilidade
+é preservada: tarefas pessoais sem URL GitHub e sem `Projeto` continuam válidas;
+sem `--strict`, IDs legados e URLs desconhecidas permanecem aceitos com aviso.
+
+**Validação:** 226 testes passaram e 2 foram pulados; `ruff check .` limpo. Os
+testes novos cobrem parser de URL, subcaminho/query/fragmento, acentos, projeto
+conhecido/desconhecido/duplicado, bloqueio sem PATCH, releitura da relação,
+`--dry-run` e preflight integral de lote.

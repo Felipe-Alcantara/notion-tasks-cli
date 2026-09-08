@@ -76,6 +76,8 @@ notion-tasks-cli/
 
 - **Tarefas** — listar, criar, editar, mover e concluir; `criar` também aceita
   databases genéricos ao descobrir a coluna de título pelo schema.
+- **Projetos** — `criar` e `editar-linha` podem resolver a relação `Projeto` a
+  partir da URL GitHub; `--strict` valida URL, relação e título antes de escrever.
 - **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas;
   `exemplo` devolve uma amostra de linhas com propriedades e corpo completos.
 - **Propriedades** — substituir ou acrescentar valores em linhas de database.
@@ -162,6 +164,14 @@ notion-tasks concluir <id> "Concluído"
 notion-tasks criar "Relatório — 25/08/2026" \
   --set "Data=2026-08-25" --set "Status=Concluído" --conteudo "# Resultado"
 
+# Projeto GitHub: a URL resolve a única linha correspondente da database GITHUB
+notion-tasks criar "Automações-do-Notion/Tasks — nova regra" \
+  --set "URL de referência=https://github.com/Felipe-Alcantara/Automa-es-do-Notion.git/tree/main?tab=files" \
+  --strict
+notion-tasks editar-linha <id> \
+  --set "URL de referência=https://github.com/Felipe-Alcantara/Automa-es-do-Notion" \
+  --strict
+
 # Lotes de linhas (um único processo; progresso vai para stderr)
 notion-tasks criar --arquivo novas-linhas.json --progresso-a-cada 25
 notion-tasks editar-linha --arquivo atualizacoes.json --progresso-a-cada 25
@@ -224,6 +234,22 @@ em `resultados` para cada linha. Falhas de validação/API ficam na linha afetad
 as demais continuam; uma criação feita cuja complementação falhe fica como
 `pendente` com o ID já criado. O progresso periódico é emitido em stderr para
 manter stdout como JSON válido.
+
+Quando a entrada informa `URL de referência` (ou uma URL GitHub na coluna
+`Projeto`), o CLI normaliza `owner/repo`, ignora `.git`, subcaminho, query e
+fragmento, e procura a linha correspondente na database relacionada `GITHUB`.
+Uma correspondência única é aplicada com `relacionar` e confirmada por releitura;
+URL desconhecida nunca inventa uma relação. `--strict` faz esse preflight antes
+da primeira escrita, exige o título no formato
+`<projeto>/<contexto> — descrição` e bloqueia URL, projeto ou título
+inconsistentes. Sem `--strict`, a URL desconhecida gera aviso e a forma legada
+continua compatível. Tarefas pessoais continuam permitidas quando não têm URL
+GitHub nem `Projeto`.
+
+Use `--dry-run` para executar o preflight e visualizar as propriedades/relação
+planejadas sem criar ou editar nada. Com `--arquivo --strict`, todas as linhas
+são validadas primeiro; uma entrada inválida bloqueia o lote inteiro para evitar
+escrita parcial. `--arquivo --dry-run` mostra o plano de cada linha.
 
 Também funciona como módulo com `python -m cli ...`. Execute
 `notion-tasks --help` para consultar o guia completo e os demais subcomandos.

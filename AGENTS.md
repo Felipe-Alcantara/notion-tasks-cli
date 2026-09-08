@@ -10,7 +10,7 @@ checkout começa por `pipx install "notion-automacoes[app]"`.
 
 ```
 cli/notion_tasks.py   → borda: parse de argumentos, saída humana/JSON, --help para IAs
-services/             → shims para notion_starter.services; exceção: propriedades.py é específico do CLI
+services/             → shims para notion_starter.services; exceções: propriedades.py e preflight.py são específicos do CLI
 integrations/         → Notion local + shims para adaptadores GitHub/OpenRouter do notion-starter
 core/config.py        → configuração (.env, token) — imutável, nunca vaza segredo em repr
 ```
@@ -25,7 +25,8 @@ core/config.py        → configuração (.env, token) — imutável, nunca vaza
 `integrations/github.py`, `integrations/openrouter.py` e os `services` comuns são shims para
 `notion-starter`. Bugfix de regra compartilhada deve ser feito em
 `modules/notion-starter/src/notion_starter/`. `services/propriedades.py` continua específico do
-CLI.
+CLI. `services/preflight.py` também é específico do CLI: resolve URLs GitHub e
+valida o contrato de projeto antes de delegar a escrita para esses serviços.
 
 ## Convenções do CLI
 
