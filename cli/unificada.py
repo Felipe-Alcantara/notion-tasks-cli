@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from . import atualizacao_nativa
+
 DISTRIBUICAO = "notion-automacoes"
 VERSAO_FONTE = "0.3.0"
 PORTAS_APP = (8000, 5173)
@@ -106,10 +108,15 @@ def construir_parser() -> argparse.ArgumentParser:
         "doctor",
         help="verifica Python, dependências, perfis, rede e componentes opcionais",
     )
-    sub.add_parser(
+    update = sub.add_parser(
         "update",
         aliases=("atualizar",),
-        help="mostra o comando seguro para atualizar a instalação",
+        help="atualiza o binário nativo ou mostra como atualizar o pacote Python",
+    )
+    update.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="consulta a Release e mostra o plano sem baixar nem substituir",
     )
     return parser
 
@@ -342,6 +349,48 @@ def preparar_atualizacao() -> dict[str, Any]:
     }
 
 
+def _eh_binario_nativo() -> bool:
+    """Indica se a entrada está rodando dentro de um executável PyInstaller."""
+
+    return bool(getattr(sys, "frozen", False))
+
+
+def _deve_verificar_automaticamente(
+    args: argparse.Namespace,
+    argumentos: Sequence[str],
+) -> bool:
+    """Evita rede em ajuda, doctor, update e quando o usuário opta por não atualizar."""
+
+    if not _eh_binario_nativo():
+        return False
+    if args.comando in {"doctor", "update", "atualizar"}:
+        return False
+    if any(item in {"--help", "-h"} for item in argumentos):
+        return False
+    return not any(
+        os.environ.get(nome, "").strip().lower() in {"1", "true", "sim", "yes"}
+        for nome in (
+            "NOTION_AUTOMACOES_NO_UPDATE",
+            "NOTION_AUTOMACOES_SEM_AUTO_UPDATE",
+        )
+    )
+
+
+def _verificar_auto_update(
+    args: argparse.Namespace,
+    argumentos: Sequence[str],
+) -> dict[str, Any] | None:
+    """Consulta/aplica uma Release sem poluir a saída do comando principal."""
+
+    if not _deve_verificar_automaticamente(args, argumentos):
+        return None
+    return atualizacao_nativa.atualizar_automaticamente(
+        versao_distribuicao(),
+        executavel=sys.executable,
+        argumentos=argumentos,
+    )
+
+
 def _iniciar_app(args: argparse.Namespace) -> int:
     """Inicia o launcher empacotado, que detecta a SPA sem Node/npm."""
 
@@ -399,9 +448,20 @@ def _imprimir(dados: Any, *, json_saida: bool) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     """Ponto de entrada público da distribuição única."""
 
+    argumentos = list(sys.argv[1:] if argv is None else argv)
+    if argumentos and argumentos[0] == atualizacao_nativa.ARGUMENTO_APLICAR:
+        try:
+            return atualizacao_nativa.executar_troca_agendada(argumentos[1:])
+        except Exception as exc:  # noqa: BLE001 - helper é fronteira do executável
+            print(f"Falha na atualização nativa agendada: {exc}", file=sys.stderr)
+            return 2
+
     parser = construir_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argumentos)
     try:
+        resultado_auto = _verificar_auto_update(args, argumentos)
+        if resultado_auto and resultado_auto.get("status") == "agendado":
+            return 0
         if args.comando in {"tasks", "tarefas"}:
             return _delegar_tasks(args)
         if args.comando in {"auth", "perfis"}:
@@ -411,6 +471,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             _imprimir(dados, json_saida=args.json)
             return 0 if dados["ok"] else 1
         if args.comando in {"update", "atualizar"}:
+            if _eh_binario_nativo():
+                dados = atualizacao_nativa.atualizar_nativo(
+                    versao_distribuicao(),
+                    executavel=sys.executable,
+                    argumentos=argumentos,
+                    apenas_verificar=args.dry_run,
+                )
+                _imprimir(dados, json_saida=args.json)
+                return 0 if dados.get("ok", True) else 2
             _imprimir(preparar_atualizacao(), json_saida=args.json)
             return 0
         if args.comando == "app" and args.acao_app == "start":

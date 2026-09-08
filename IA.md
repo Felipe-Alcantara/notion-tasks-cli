@@ -617,3 +617,37 @@ sem `--strict`, IDs legados e URLs desconhecidas permanecem aceitos com aviso.
 testes novos cobrem parser de URL, subcaminho/query/fragmento, acentos, projeto
 conhecido/desconhecido/duplicado, bloqueio sem PATCH, releitura da relação,
 `--dry-run` e preflight integral de lote.
+
+## [2026-09-08] Mecanismo de auto-update e rollback dos binários nativos
+
+A distribuição Python `0.3.0` não deve se atualizar por cima do ambiente do
+usuário nem baixar um executável sem validação. A task de distribuição definiu
+que o update nativo fica embutido no executável PyInstaller, consulta a Release
+estável do GitHub e deixa o rollback de produto manual pela Release anterior.
+
+### O que foi implementado
+
+- `cli/atualizacao_nativa.py` define a matriz `windows-x64`, `macos-x64`,
+  `macos-arm64` e `linux-x64`, com nomes de asset determinísticos e checksum
+  `.sha256` irmão;
+- a consulta rejeita draft/pré-release e tags que não sejam SemVer estável,
+  monta um plano sem tocar no disco e exige o asset do alvo detectado;
+- o download é conferido com SHA-256 antes da troca; macOS/Linux usam
+  `os.replace`, preservam permissões e guardam `<executável>.previous`;
+- no Windows, a entrada agenda um helper do próprio executável, que espera o
+  processo pai sair, troca o arquivo bloqueado e relança os argumentos originais;
+- `cli/unificada.py` verifica automaticamente apenas em binários nativos, usa
+  cache de 24 horas, respeita `NOTION_AUTOMACOES_NO_UPDATE=1` e mantém `update`
+  Python como sugestão de `pipx`/`uv`/`pip`; `update --dry-run` permite auditar o
+  plano sem baixar;
+- README, `QUALIDADE.md` e o contrato do hub documentam a retenção mínima de
+  duas Releases estáveis e o procedimento de rollback manual.
+
+### Validação e limite conhecido
+
+Os testes offline cobrem a matriz, parsing de Release, filtro de pré-release,
+checksum correto/incorreto, proteção de destino preexistente, troca atômica,
+backup, helper Windows, `dry-run`, cache e integração da fachada. A validação
+física dos quatro executáveis, assinatura/notarização e rollback usando assets
+reais ainda depende das tasks irmãs de PyInstaller e assinatura; nenhum binário
+nativo foi publicado ou executado nesta mudança.

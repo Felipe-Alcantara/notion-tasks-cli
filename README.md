@@ -56,6 +56,7 @@ notion-tasks-cli/
 │
 ├── 📁 cli/                      # Parse de argumentos e saída pública
 │   ├── __main__.py              # Execução com python -m cli
+│   ├── atualizacao_nativa.py    # Update seguro dos binários PyInstaller
 │   ├── unificada.py             # Entrada distribuída notion-automacoes
 │   └── notion_tasks.py          # Comando notion-tasks e guia --help
 ├── 📁 core/                     # Configuração e perfis locais
@@ -84,6 +85,9 @@ notion-tasks-cli/
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
 - **Relatórios** — exportar relatórios diários para DOCX.
+- **Distribuição nativa** — detectar novas Releases, validar SHA-256 e atualizar
+  executáveis PyInstaller com backup local; rollback de produto continua manual
+  pela Release anterior.
 - **Automação para IA** — envelope JSON estável e `--help` escrito para modelos.
 - **Múltiplos workspaces** — perfis locais com tokens mascarados nas saídas.
 
@@ -123,6 +127,7 @@ notion-automacoes tasks listar
 notion-automacoes app start
 notion-automacoes mcp start
 notion-automacoes update
+notion-automacoes update --dry-run
 ```
 
 O alias histórico permanece disponível:
@@ -142,6 +147,17 @@ notion-automacoes auth listar
 
 Consulte o [contrato de distribuição do hub](https://github.com/Felipe-Alcantara/Automa-es-do-Notion/blob/main/docs/DISTRIBUICAO.md)
 para a matriz de release, a política de perfis e os limites do primeiro release.
+
+Em binários nativos, comandos normais verificam uma Release estável no máximo
+uma vez por 24 horas e fazem a troca com checksum; `update --dry-run` mostra o
+plano sem alterar o disco. `NOTION_AUTOMACOES_NO_UPDATE=1` desabilita a
+verificação automática. Em instalações Python o comando `update` continua
+apenas mostrando o comando seguro de `pipx`, `uv` ou `pip`.
+
+O rollback de produto é manual: baixe na Release anterior o asset correspondente
+ao sistema, valide assinatura e `.sha256`, encerre o programa e substitua o
+executável. A política de publicação mantém pelo menos duas Releases estáveis;
+o arquivo `<executável>.previous` é somente uma recuperação local adicional.
 
 Prefere um passo a passo guiado? Clone o repositório e use o menu:
 

@@ -10,6 +10,7 @@ checkout começa por `pipx install "notion-automacoes[app]"`.
 
 ```
 cli/notion_tasks.py   → borda: parse de argumentos, saída humana/JSON, --help para IAs
+cli/atualizacao_nativa.py → borda da distribuição: Releases, checksum e troca do executável
 services/             → shims para notion_starter.services; exceções: propriedades.py e preflight.py são específicos do CLI
 integrations/         → Notion local + shims para adaptadores GitHub/OpenRouter do notion-starter
 core/config.py        → configuração (.env, token) — imutável, nunca vaza segredo em repr

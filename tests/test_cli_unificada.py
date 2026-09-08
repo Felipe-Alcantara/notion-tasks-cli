@@ -115,6 +115,65 @@ def test_update_apenas_imprime_comando_e_nao_executa(monkeypatch, capsys):
     assert "Nenhum comando foi executado." in saida
 
 
+def test_binario_verifica_update_antes_de_delegar(monkeypatch):
+    """Um binário nativo verifica a Release antes de executar o comando."""
+
+    chamadas = []
+    auto_updates = []
+    monkeypatch.setattr(unificada.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        unificada.atualizacao_nativa,
+        "atualizar_automaticamente",
+        lambda *args, **kwargs: auto_updates.append((args, kwargs))
+        or {"ok": True, "status": "atualizado"},
+    )
+    monkeypatch.setattr(
+        "cli.notion_tasks.main",
+        lambda argumentos: chamadas.append(argumentos) or 0,
+    )
+
+    assert unificada.main(["tasks", "listar"]) == 0
+    assert auto_updates[0][0][0] == unificada.versao_distribuicao()
+    assert auto_updates[0][1]["argumentos"] == ["tasks", "listar"]
+    assert chamadas == [["listar"]]
+
+
+def test_binario_sai_quando_troca_windows_foi_agendada(monkeypatch):
+    """O processo pai não continua usando o executável bloqueado."""
+
+    chamadas = []
+    monkeypatch.setattr(unificada.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        unificada.atualizacao_nativa,
+        "atualizar_automaticamente",
+        lambda *args, **kwargs: {"ok": True, "status": "agendado"},
+    )
+    monkeypatch.setattr(
+        "cli.notion_tasks.main",
+        lambda argumentos: chamadas.append(argumentos) or 0,
+    )
+
+    assert unificada.main(["tasks", "listar"]) == 0
+    assert chamadas == []
+
+
+def test_update_do_binario_oferece_dry_run(monkeypatch, capsys):
+    """A consulta manual pode ser feita sem alterar o arquivo atual."""
+
+    chamadas = []
+    monkeypatch.setattr(unificada.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        unificada.atualizacao_nativa,
+        "atualizar_nativo",
+        lambda *args, **kwargs: chamadas.append((args, kwargs))
+        or {"ok": True, "status": "disponivel", "aplicado": False},
+    )
+
+    assert unificada.main(["--json", "update", "--dry-run"]) == 0
+    assert chamadas[0][1]["apenas_verificar"] is True
+    assert json.loads(capsys.readouterr().out)["status"] == "disponivel"
+
+
 def test_app_sem_extra_dá_instrução_de_instalação(monkeypatch, capsys):
     """Sem o extra opcional, app start falha com uma ação reparável."""
 

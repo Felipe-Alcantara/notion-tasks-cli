@@ -81,3 +81,12 @@ pessoais sem URL GitHub/Projeto; uma URL GitHub desconhecida não cria relação
 é devolvida como aviso. `--dry-run` é somente leitura. Em lotes estritos, todos
 os preflights são executados antes de qualquer criação/edição, evitando escrita
 parcial quando uma entrada falha.
+
+## Atualização nativa
+
+`cli/atualizacao_nativa.py` é coberto offline: a suíte valida a matriz de quatro
+alvos, o contrato de assets, o filtro de Releases estáveis, o SHA-256, a troca
+atômica, o backup local e o helper de troca no Windows. Não é permitido que a
+suíte baixe ou execute um binário real. A validação física de PyInstaller,
+assinatura, notarização e rollback de uma Release depende dos workflows de
+empacotamento/assinatura e deve ser feita quando esses artefatos existirem.
