@@ -22,15 +22,18 @@ from pathlib import Path
 from typing import Any
 
 from . import atualizacao_nativa
+from .versao import VERSAO_FONTE, ler_versao_embutida
 
 DISTRIBUICAO = "notion-automacoes"
-VERSAO_FONTE = "0.3.0"
 PORTAS_APP = (8000, 5173)
 
 
 def versao_distribuicao() -> str:
     """Retorna a versão instalada, com fallback útil durante o desenvolvimento."""
 
+    versao_nativa = ler_versao_embutida()
+    if versao_nativa:
+        return versao_nativa
     try:
         return importlib.metadata.version(DISTRIBUICAO)
     except importlib.metadata.PackageNotFoundError:

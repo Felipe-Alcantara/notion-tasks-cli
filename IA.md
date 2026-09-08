@@ -651,3 +651,22 @@ backup, helper Windows, `dry-run`, cache e integração da fachada. A validaçã
 física dos quatro executáveis, assinatura/notarização e rollback usando assets
 reais ainda depende das tasks irmãs de PyInstaller e assinatura; nenhum binário
 nativo foi publicado ou executado nesta mudança.
+
+## [2026-09-08] Workflow de empacotamento PyInstaller para a matriz nativa
+
+A task de empacotamento passou a ter um caminho reproduzível no próprio
+`notion-tasks-cli`, sem alterar a Release Python `0.3.0`. O builder
+`scripts/build_native.py` centraliza os quatro alvos (`windows-x64`,
+`macos-x64`, `macos-arm64` e `linux-x64`), os nomes de asset definidos pelo
+updater, a versão da tag e o checksum SHA-256. `scripts/native_entrypoint.py`
+mantém o import relativo da fachada `cli.unificada`; `cli/versao.py` lê a versão
+embutida no bundle para que o auto-update compare a versão real da tag, não o
+fallback do ambiente Python.
+
+O workflow `.github/workflows/native-release.yml` executa builds em runners
+separados por arquitetura, roda smoke diretamente no executável e disponibiliza
+os binários como artefatos do workflow. A anexação ao GitHub Release exige um
+despacho manual, `publicar_release=true` e aprovação do ambiente
+`native-release`; isso evita publicar binários sem a assinatura/notarização da
+task irmã. A validação em máquinas limpas sem Python e a assinatura real ainda
+dependem das tasks de certificação e aceitação física.

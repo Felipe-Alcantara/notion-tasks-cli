@@ -90,3 +90,12 @@ atômica, o backup local e o helper de troca no Windows. Não é permitido que a
 suíte baixe ou execute um binário real. A validação física de PyInstaller,
 assinatura, notarização e rollback de uma Release depende dos workflows de
 empacotamento/assinatura e deve ser feita quando esses artefatos existirem.
+
+O workflow `.github/workflows/native-release.yml` usa `scripts/build_native.py`
+para construir um executável `--onefile` por runner, embutir a versão da tag,
+gerar os quatro nomes oficiais e escrever o checksum `.sha256`. O
+`scripts/smoke_native.py` executa o binário produzido diretamente, sem importar
+Python da aplicação, e confere `--version`, `--help`, `tasks --help` e `doctor`.
+Os artefatos são anexados a uma Release somente por despacho manual e pelo
+ambiente protegido `native-release`; a assinatura/notarização continua sendo um
+pré-requisito humano da task irmã.

@@ -24,6 +24,9 @@ dev = [
     "responses>=0.23",
     "ruff>=0.4",
 ]
+native = [
+    "pyinstaller>=6,<7",
+]
 
 [project.scripts]
 notion-automacoes = "cli.unificada:main"

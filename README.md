@@ -63,7 +63,9 @@ notion-tasks-cli/
 ├── 📁 integrations/             # Notion local e shims de adaptadores
 ├── 📁 services/                 # Shims e operações específicas da CLI
 ├── 📁 tests/                    # Suíte automatizada sem rede
+├── 📁 scripts/                  # Builder e smoke dos binários nativos
 ├── .github/workflows/ci.yml     # Gate em Python 3.10–3.13
+├── .github/workflows/native-release.yml # Matriz PyInstaller e assets
 ├── start_app.py                 # Menu interativo de entrada
 ├── pyproject.toml               # Pacote e entry points públicos
 ├── QUALIDADE.md                 # Contrato de qualidade do módulo
@@ -87,7 +89,8 @@ notion-tasks-cli/
 - **Relatórios** — exportar relatórios diários para DOCX.
 - **Distribuição nativa** — detectar novas Releases, validar SHA-256 e atualizar
   executáveis PyInstaller com backup local; rollback de produto continua manual
-  pela Release anterior.
+  pela Release anterior. O workflow produz Windows x64, macOS Intel, macOS ARM64
+  e Linux x64 com assets determinísticos e checksum irmão.
 - **Automação para IA** — envelope JSON estável e `--help` escrito para modelos.
 - **Múltiplos workspaces** — perfis locais com tokens mascarados nas saídas.
 
@@ -158,6 +161,29 @@ O rollback de produto é manual: baixe na Release anterior o asset correspondent
 ao sistema, valide assinatura e `.sha256`, encerre o programa e substitua o
 executável. A política de publicação mantém pelo menos duas Releases estáveis;
 o arquivo `<executável>.previous` é somente uma recuperação local adicional.
+
+### Binários nativos
+
+O workflow `Native binaries` é acionado por tags SemVer (`vX.Y.Z`) e também pode
+ser executado manualmente para uma tag existente. Cada runner constrói um
+executável PyInstaller `--onefile`, embute a versão da tag, executa o smoke de
+`--version`, `--help`, `tasks --help` e `doctor`, e publica o binário junto do
+asset `<executável>.sha256` como artefato do workflow.
+
+Os quatro nomes oficiais são:
+
+```text
+notion-automacoes-windows-x64.exe
+notion-automacoes-macos-x64
+notion-automacoes-macos-arm64
+notion-automacoes-linux-x64
+```
+
+A anexação à GitHub Release é manual (`workflow_dispatch` com
+`publicar_release=true`) e passa pelo ambiente protegido `native-release`. Antes
+de aprovar essa etapa, os assets precisam passar pelo processo de assinatura e
+notarização da task correspondente. A task de empacotamento não altera a Release
+`0.3.0` existente.
 
 Prefere um passo a passo guiado? Clone o repositório e use o menu:
 
@@ -323,6 +349,9 @@ git clone https://github.com/Felipe-Alcantara/notion-tasks-cli.git
 cd notion-tasks-cli
 python -m pip install -e ".[dev]"
 
+# Para construir binários nativos localmente
+python -m pip install -e ".[native]"
+
 # Execute a suíte
 python -m pytest
 ```
@@ -339,6 +368,13 @@ python -m pytest
 A CI executa o gate em Python 3.10, 3.11, 3.12 e 3.13. Consulte
 [`QUALIDADE.md`](QUALIDADE.md) para o critério de pronto e a política de
 dependências do CLI.
+
+O build nativo é reproduzível por alvo com:
+
+```bash
+python scripts/build_native.py --target linux-x64 --version v0.4.0 --output dist-native
+python scripts/smoke_native.py --executable dist-native/notion-automacoes-linux-x64 --version v0.4.0
+```
 
 ---
 
