@@ -1872,3 +1872,166 @@ def test_coluna_inexistente_vira_erro_de_uso_com_caminho():
     mensagem = saida["erro"]["mensagem"]
     assert "Áreas da vida" in mensagem
     assert "schema <database_id>" in mensagem
+
+
+def test_erro_404_nomeia_o_perfil_ativo(tmp_path: Path):
+    """REGRA 8 em código: "ID válido devolvendo 404 quase nunca é permissão —
+    é o perfil salvo apontando pra outro workspace, e ele vence o
+    NOTION_TOKEN em silêncio" deixou de ser só uma frase de prosa que o
+    agente lembrava (ou não) de seguir. Confirmar a suspeita custava outra
+    chamada (`perfis listar`); agora o nome do perfil já vem junto do 404.
+    """
+    arquivo = tmp_path / "perfis.json"
+    cli.perfis_workspace.adicionar_perfil(
+        alias="relatorios", token="ntn_" + "a" * 20, ativar=True, caminho=arquivo
+    )
+    with mock.patch.object(cli.perfis_workspace, "ARQUIVO_PADRAO", arquivo):
+        codigo, saida = _executar(
+            ["--json", "buscar", "x"], client=ClienteQueRecusa(404, "não encontrado")
+        )
+
+    assert codigo == 1
+    mensagem = saida["erro"]["mensagem"]
+    assert mensagem.startswith("Recurso não encontrado.")
+    assert "'relatorios'" in mensagem
+    assert "perfis listar" in mensagem
+
+
+def test_erro_404_sem_perfil_ativo_mantem_a_mensagem_curta():
+    """Sem perfil configurado (autouse `perfis_isolados` garante isso por
+    padrão), a mensagem antiga continua exatamente igual — nada de sufixo
+    vazio nem pontuação sobrando.
+    """
+    codigo, saida = _executar(
+        ["--json", "buscar", "x"], client=ClienteQueRecusa(404, "não encontrado")
+    )
+    assert codigo == 1
+    assert saida["erro"]["mensagem"] == "Recurso não encontrado."
+
+
+class ClienteRelatorioDiario(FakeClient):
+    """Database de relatórios diários em memória — título, Data e Resumo."""
+
+    def __init__(self, paginas: list[dict] | None = None) -> None:
+        super().__init__()
+        self.paginas_relatorio = paginas or []
+        self.criadas: list[tuple[str, dict]] = []
+        self._sequencia = 0
+
+    def get_database(self, database_id):
+        return {
+            "properties": {
+                "Relatório": {"type": "title"},
+                "Data": {"type": "date"},
+                "Resumo": {"type": "rich_text"},
+                "O que fiz": {"type": "rich_text"},
+                "Status": {"type": "status", "status": {"options": [], "groups": []}},
+                "Área": {"type": "select", "select": {"options": []}},
+            }
+        }
+
+    def consultar_database(self, database_id, buscar_todos=False, **kwargs):
+        return self.paginas_relatorio
+
+    def criar_pagina(self, database_id, propriedades):
+        self._sequencia += 1
+        page_id = f"relatorio-{self._sequencia}"
+        self.criadas.append((page_id, propriedades))
+        return {"id": page_id, "url": f"https://notion.so/{page_id}"}
+
+    def atualizar_pagina(self, page_id, propriedades):
+        return {"id": page_id}
+
+
+def test_relatorio_do_dia_exige_corpo_a_menos_que_permitido():
+    codigo, saida = _executar(
+        ["--json", "relatorio-do-dia", "--database", "db1", "--resumo", "oi"]
+    )
+    assert codigo == 2
+    assert "--corpo está vazio" in saida["erro"]["mensagem"]
+    assert "--permitir-corpo-vazio" in saida["erro"]["mensagem"]
+
+
+def test_relatorio_do_dia_escreve_corpo_e_resumo_curto(monkeypatch):
+    chamadas_escrita: list[tuple[str, str]] = []
+
+    def falso_escrever(page_id, markdown, *, substituir=False, cliente=None):
+        chamadas_escrita.append((page_id, markdown))
+        return markdown.count("\n") + 1
+
+    monkeypatch.setattr(cli.svc_relatorios, "escrever_conteudo", falso_escrever)
+
+    cliente = ClienteRelatorioDiario()
+    codigo, saida = _executar(
+        [
+            "--json",
+            "relatorio-do-dia",
+            "--database",
+            "db1",
+            "--data",
+            "2026-09-09",
+            "--resumo",
+            "Corrigi o bug do relatório indo pra propriedade em vez do corpo.",
+            "--corpo",
+            "# Relato completo\n\nParágrafo bem mais longo do que caberia numa coluna.",
+        ],
+        client=cliente,
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["acao"] == "criada"
+    assert "avisos" not in saida["dados"]
+    assert len(chamadas_escrita) == 1
+    assert chamadas_escrita[0][1].startswith("# Relato completo")
+    (page_id, propriedades) = cliente.criadas[0]
+    assert "Resumo" in propriedades
+    # O relato longo foi para o corpo (via escrever_conteudo), não duplicado
+    # na propriedade.
+    assert "Parágrafo bem mais longo" not in json.dumps(propriedades)
+
+
+def test_relatorio_do_dia_avisa_quando_propriedade_vira_relato(monkeypatch):
+    monkeypatch.setattr(
+        cli.svc_relatorios, "escrever_conteudo", lambda *a, **k: 1
+    )
+    texto_grande = "x" * 500
+
+    codigo, saida = _executar(
+        [
+            "--json",
+            "relatorio-do-dia",
+            "--database",
+            "db1",
+            "--o-que-fiz",
+            texto_grande,
+            "--corpo",
+            "corpo normal",
+        ],
+        client=ClienteRelatorioDiario(),
+    )
+
+    assert codigo == 0
+    avisos = saida["dados"]["avisos"]
+    assert len(avisos) == 1
+    assert "--o-que-fiz" in avisos[0]
+    assert "500 caracteres" in avisos[0]
+
+
+def test_relatorio_do_dia_permite_corpo_vazio_quando_pedido(monkeypatch):
+    monkeypatch.setattr(
+        cli.svc_relatorios, "escrever_conteudo", lambda *a, **k: 0
+    )
+    codigo, saida = _executar(
+        [
+            "--json",
+            "relatorio-do-dia",
+            "--database",
+            "db1",
+            "--resumo",
+            "Nada a registrar hoje.",
+            "--permitir-corpo-vazio",
+        ],
+        client=ClienteRelatorioDiario(),
+    )
+    assert codigo == 0
+    assert saida["dados"]["blocos_escritos"] == 0

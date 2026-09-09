@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -2001,6 +2002,90 @@ def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFac
     }
 
 
+#: Acima disto, uma coluna de resumo parou de ser resumo. Não é um limite
+#: rígido do Notion — é o ponto em que vale avisar em vez de deixar passar
+#: quieto. Medido em 09/09/2026: mais de um agente (este incluído) despejou o
+#: relato do dia inteiro na coluna "O que fiz" (até 7 mil caracteres numa
+#: linha só) e deixou o corpo da página vazio — exatamente o que este comando
+#: existe para não deixar acontecer de novo.
+_LIMIAR_PROPRIEDADE_CURTA = 400
+
+#: (nome da flag exibido no aviso, nome da coluna no Notion, atributo em ``args``)
+_COLUNAS_RESUMO_RELATORIO = (
+    ("--resumo", "Resumo", "resumo"),
+    ("--o-que-fiz", "O que fiz", "o_que_fiz"),
+    ("--bloqueios", "Bloqueios", "bloqueios"),
+    ("--proximos-passos", "Próximos passos", "proximos_passos"),
+)
+
+
+def cmd_relatorio_do_dia(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Cria ou complementa a linha do dia em uma database de Relatórios diários.
+
+    Existe para fechar, em código, o que a instrução em prosa ("preencha as
+    colunas E o corpo") deixava ambíguo na prática: ``--corpo`` é o único
+    lugar para o relato completo, em Markdown; as colunas (``--resumo``,
+    ``--o-que-fiz``, ``--bloqueios``, ``--proximos-passos``) são sempre um
+    resumo curto. O comando não impede um resumo comprido — algumas colunas
+    legitimamente precisam de mais espaço —, mas avisa quando uma passa de
+    ``_LIMIAR_PROPRIEDADE_CURTA`` caracteres, porque essa é a marca de que o
+    relato foi parar no lugar errado.
+
+    Idempotente pela data, via
+    :func:`notion_starter.services.relatorios_diarios.publicar_relatorios`: dia
+    que já existe é complementado (o corpo novo entra depois do que já
+    estava), nunca sobrescrito; as propriedades de um dia existente ficam como
+    estão, porque costumam descrever o trabalho de outro projeto no mesmo dia.
+    """
+
+    database_id = _texto_obrigatorio(args.database, "--database")
+    data = _normalizar_texto(args.data) or date.today().isoformat()
+    corpo = _normalizar_texto(args.corpo) or ""
+
+    if not corpo and not args.permitir_corpo_vazio:
+        raise CLIError(
+            "--corpo está vazio. O relato completo do dia vai no corpo da página, "
+            "nunca numa propriedade — se não há mesmo nada a registrar hoje além "
+            "das colunas, use --permitir-corpo-vazio."
+        )
+
+    avisos: list[str] = []
+    propriedades: dict[str, Any] = {}
+    for flag, coluna, atributo in _COLUNAS_RESUMO_RELATORIO:
+        texto = _normalizar_texto(getattr(args, atributo))
+        if texto is None:
+            continue
+        if len(texto) > _LIMIAR_PROPRIEDADE_CURTA:
+            avisos.append(
+                f"{flag} tem {len(texto)} caracteres — isso parece relato, não "
+                f"resumo. Considere mover o texto para --corpo e deixar {flag} "
+                "só com o essencial escaneável."
+            )
+        propriedades[coluna] = starter_properties.rich_text(texto)
+    if args.status:
+        propriedades["Status"] = starter_properties.status(args.status)
+    if args.area:
+        propriedades["Área"] = starter_properties.select(args.area)
+
+    relatorio = svc_relatorios.RelatorioDiario(
+        data=data, corpo_markdown=corpo, propriedades=propriedades
+    )
+    resultado = svc_relatorios.publicar_relatorios(
+        database_id, [relatorio], cliente=client_factory()
+    )
+    r = resultado.relatorios[0]
+    saida: dict[str, Any] = {
+        "data": r.data,
+        "id": r.page_id,
+        "acao": r.acao,
+        "blocos_escritos": r.blocos_escritos,
+        "url": r.url,
+    }
+    if avisos:
+        saida["avisos"] = avisos
+    return saida
+
+
 def cmd_buscar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     return svc_conteudo.buscar(_normalizar_texto(args.query), cliente=client_factory())
 
@@ -2368,6 +2453,14 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         '--repo "Felixo AI Core=/caminho/Felixo-AI-Core"',
         'python -m cli --json relatorios-do-git --database <id> --desde 2026-08-01 '
         '--repo "App=/caminho/app" --repo "Lib=/caminho/lib" --area Trabalho',
+    ],
+    "relatorio-do-dia": [
+        'python -m cli --json relatorio-do-dia --database <id> '
+        '--resumo "Corrigi o bug X e entreguei a feature Y" '
+        '--corpo "$(cat relato-do-dia.md)"',
+        'python -m cli --json relatorio-do-dia --database <id> --data 2026-09-08 '
+        '--resumo "..." --o-que-fiz "..." --bloqueios "..." --proximos-passos "..." '
+        '--status Concluído --corpo "$(cat relato.md)"',
     ],
     "schema": [
         "python -m cli --json schema <database_id>",
@@ -2855,6 +2948,50 @@ def construir_parser() -> argparse.ArgumentParser:
         help="só mostra os dias que seriam escritos, sem tocar no Notion",
     )
 
+    relatorio_do_dia = sub.add_parser(
+        "relatorio-do-dia",
+        help="cria ou complementa a linha do dia em Relatórios diários; "
+        "--corpo é sempre o relato completo, as demais colunas são sempre um "
+        "resumo curto — o comando avisa se uma delas ficou grande demais",
+    )
+    relatorio_do_dia.add_argument(
+        "--database", required=True, help="database dos relatórios diários"
+    )
+    relatorio_do_dia.add_argument(
+        "--data", help="data ISO (AAAA-MM-DD); padrão: hoje"
+    )
+    relatorio_do_dia.add_argument(
+        "--corpo",
+        help="relato completo do dia, em Markdown — SEMPRE vai no corpo da "
+        "página, nunca numa propriedade. Complementa um dia já existente "
+        "(nunca sobrescreve).",
+    )
+    relatorio_do_dia.add_argument(
+        "--permitir-corpo-vazio",
+        dest="permitir_corpo_vazio",
+        action="store_true",
+        help="uso excepcional: grava sem --corpo (só as colunas)",
+    )
+    relatorio_do_dia.add_argument(
+        "--resumo", help='coluna "Resumo": uma frase que se entende sozinha'
+    )
+    relatorio_do_dia.add_argument(
+        "--o-que-fiz",
+        dest="o_que_fiz",
+        help='coluna "O que fiz": poucas linhas — o relato inteiro vai em --corpo',
+    )
+    relatorio_do_dia.add_argument(
+        "--bloqueios",
+        help='coluna "Bloqueios": limitações declaradas, resumidas',
+    )
+    relatorio_do_dia.add_argument(
+        "--proximos-passos",
+        dest="proximos_passos",
+        help='coluna "Próximos passos"',
+    )
+    relatorio_do_dia.add_argument("--status", help='valor da coluna "Status"')
+    relatorio_do_dia.add_argument("--area", help='valor da coluna "Área"')
+
     buscar = sub.add_parser("buscar", help="pesquisa páginas e databases visíveis")
     buscar.add_argument("query", nargs="?", help="texto do título; vazio lista tudo")
 
@@ -3217,6 +3354,8 @@ def executar(
             dados = cmd_relacionar(args, client_factory=client_factory)
         elif comando == "relatorios-do-git":
             dados = cmd_relatorios_do_git(args, client_factory=client_factory)
+        elif comando == "relatorio-do-dia":
+            dados = cmd_relatorio_do_dia(args, client_factory=client_factory)
         elif comando == "buscar":
             dados = cmd_buscar(args, client_factory=client_factory)
         elif comando == "clonar-database":
@@ -3290,8 +3429,30 @@ def _mensagem_erro_notion(exc: NotionAPIError) -> str:
     if not isinstance(exc, NotionHTTPError):
         return "Falha ao falar com o Notion."
     if exc.status_code == 404:
-        return "Recurso não encontrado."
+        return f"Recurso não encontrado.{_sufixo_perfil_ativo()}"
     return f"Notion recusou a requisição (HTTP {exc.status_code}): {_detalhe_notion(exc.body)}"
+
+
+def _sufixo_perfil_ativo() -> str:
+    """Nomeia o perfil ativo junto de um 404, para fechar em código a regra que a
+    prosa só lembrava: "ID válido devolvendo 404 quase nunca é permissão — é o
+    perfil salvo apontando pra outro workspace, e ele vence o NOTION_TOKEN do
+    ambiente em silêncio". Sem isso, confirmar a suspeita custava outra chamada
+    (``perfis listar``); com isso, o nome já vem junto do próprio erro.
+
+    Best-effort: uma falha ao ler o arquivo de perfis (ausente, corrompido) não
+    pode esconder o 404 original atrás de um traceback novo.
+    """
+    try:
+        alias = perfis_workspace.carregar_store().ativo
+    except Exception:
+        return ""
+    if not alias:
+        return ""
+    return (
+        f" Perfil ativo: '{alias}' — se o ID existe noutro workspace, confira "
+        "com 'perfis listar' antes de investigar compartilhamento com a integração."
+    )
 
 
 def _detalhe_notion(corpo: str) -> str:

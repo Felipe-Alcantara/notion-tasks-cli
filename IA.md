@@ -670,3 +670,53 @@ despacho manual, `publicar_release=true` e aprovação do ambiente
 `native-release`; isso evita publicar binários sem a assinatura/notarização da
 task irmã. A validação em máquinas limpas sem Python e a assinatura real ainda
 dependem das tasks de certificação e aceitação física.
+
+## [2026-09-09] Comando `relatorio-do-dia` e perfil ativo no erro 404
+
+**Diagnóstico.** O prompt-padrão que orienta agentes a escrever nos
+Relatórios diários dizia "preencha as colunas, não só o corpo" sem nunca
+mandar escrever o corpo de fato. Medido no dia: mais de um agente (rodando
+fora deste repositório, via `editar-linha`/`escrever` soltos) despejou o
+relato inteiro na propriedade "O que fiz" — até 21 mil caracteres numa
+coluna só numa linha antiga, 7 mil numa nova — e em pelo menos um caso
+deixou o corpo da página vazio. Uma varredura das 249 linhas do database não
+achou mais nenhum caso de corpo vazio (o problema foi isolado àquele dia),
+mas confirmou que a ambiguidade property-vs-corpo é real e vinha do próprio
+prompt, não só de um agente distraído.
+
+**Implementação.**
+
+- `cmd_relatorio_do_dia` (`cli/notion_tasks.py`) — comando novo,
+  `relatorio-do-dia --database <id> [--data AAAA-MM-DD] --corpo "..." [--resumo
+  ...] [--o-que-fiz ...] [--bloqueios ...] [--proximos-passos ...] [--status
+  ...] [--area ...]`. `--corpo` é o único destino do relato completo; recusa
+  rodar sem ele a menos que `--permitir-corpo-vazio` seja passado
+  explicitamente. Reaproveita
+  `notion_starter.services.relatorios_diarios.publicar_relatorios` (já
+  idempotente por data, já complementa em vez de sobrescrever) — nenhuma
+  lógica de escrita nova, só a borda que fecha a ambiguidade em código.
+- Cada propriedade de resumo (`--resumo`, `--o-que-fiz`, `--bloqueios`,
+  `--proximos-passos`) acima de 400 caracteres gera um aviso na saída
+  (`avisos`), sem bloquear a escrita — algumas colunas legitimamente
+  precisam de mais espaço, então o comando avisa em vez de decidir sozinho.
+- REGRA 8 do prompt "Operar Notion com segurança" ("confira o perfil antes
+  de concluir que algo não existe") também virou código:
+  `_mensagem_erro_notion` agora acrescenta o alias do perfil ativo a
+  qualquer 404, poupando a chamada separada a `perfis listar` que a regra
+  em prosa exigia lembrar de fazer.
+- O prompt-padrão "WORKFLOW ATUALIZADO 3.0" (fora deste repositório, salvo
+  como automação no Felixo AI Core) foi reescrito na mesma sessão para
+  explicitar a separação propriedade-curta/corpo-longo, citando o erro
+  medido como exemplo do que não fazer.
+
+**Validação.** 259/259 testes da suíte (7 novos: dois cobrindo o 404 com e
+sem perfil ativo, cinco cobrindo `relatorio-do-dia` — corpo obrigatório,
+escrita bem-sucedida com resumo curto e corpo separado, aviso de propriedade
+grande, `--permitir-corpo-vazio`). `ruff check` limpo. Não validado contra a
+API real do Notion nesta sessão — os testes usam clientes falsos, como o
+resto da suíte deste módulo; a prova de ponta a ponta fica para o primeiro
+uso real do comando.
+
+**Estado no ponto do registro.** Implementação e testes concluídos; commit,
+push e o uso real do comando (substituindo `editar-linha`/`escrever` soltos
+nos relatórios diários) ficam para o fechamento desta execução.
