@@ -17,7 +17,7 @@ def test_version_mostra_a_distribuicao_unica(capsys):
         unificada.main(["--version"])
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "notion-automacoes 0.4.0"
+    assert capsys.readouterr().out.strip() == "notion-automacoes 0.4.1"
 
 
 def test_tasks_delega_sem_reescrever_os_subcomandos(monkeypatch):

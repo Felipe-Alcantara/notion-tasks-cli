@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-VERSAO_FONTE = "0.4.0"
+VERSAO_FONTE = "0.4.1"
 NOME_ARQUIVO_VERSAO_NATIVA = "notion-automacoes-version.txt"
 
 
