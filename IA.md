@@ -720,3 +720,37 @@ uso real do comando.
 **Estado no ponto do registro.** Implementação e testes concluídos; commit,
 push e o uso real do comando (substituindo `editar-linha`/`escrever` soltos
 nos relatórios diários) ficam para o fechamento desta execução.
+
+## [2026-09-21] Validação real do auto-update e rollback no Windows
+
+O código do auto-update já estava publicado no `main` do módulo (`df95557`).
+Com as Releases `v0.4.0` e `v0.4.1` disponíveis, a validação foi repetida em
+uma cópia temporária do asset Windows, sem tocar em uma instalação do usuário,
+sem credencial e sem alterar a Release pública.
+
+**O que foi medido.**
+
+- `python check-dev.py`, `python -m ruff check .` e `python -m pytest -q`:
+  ambiente editável confirmado, lint limpo e `257 passed, 2 skipped`.
+- `gh release view v0.4.1 --repo Felipe-Alcantara/notion-tasks-cli`:
+  Release estável com os quatro binários e quatro assets `.sha256`; `v0.4.0`
+  também permanece publicada, satisfazendo a retenção mínima de duas Releases.
+- O executável `notion-automacoes-windows-x64.exe` da `v0.4.0` respondeu
+  `notion-automacoes 0.4.0`; o SHA-256 local bateu com o asset irmão publicado.
+- `--json update --dry-run` detectou `windows-x64` e planejou `v0.4.1` sem
+  baixar nem tocar no arquivo.
+- `--json update` baixou e validou o asset `v0.4.1`, agendou o helper porque o
+  executável estava em uso e, após a saída do processo pai, a cópia temporária
+  respondeu `notion-automacoes 0.4.1`; o backup `.previous` preservou a
+  `v0.4.0` original.
+- A restauração manual de `.previous` devolveu `notion-automacoes 0.4.0` e
+  manteve o backup disponível. Depois, um comando normal `tasks` disparou o
+  auto-update novamente e a cópia voltou a `0.4.1` com código de saída `0`.
+
+**Limites.** A execução real foi feita somente em Windows x64 e com binários
+sem assinatura. macOS Intel, macOS Apple Silicon e Linux x64 ainda precisam de
+máquinas/VMs reais; Authenticode e notarização ainda dependem da task de
+certificado, que continua em `Entrada`. A task de implementação permanece em
+`Aguardando resposta`/não em andamento até essas dependências demonstrarem o
+critério assinado; as pendências já estão nas tasks relacionadas de validação e
+certificação.
