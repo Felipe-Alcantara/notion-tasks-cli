@@ -306,6 +306,27 @@ diretório corrente: a pasta vem de `--dir-backup`, da variável
 (`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
 `backup_path` sai absoluto.
 
+### Envelope JSON e códigos de erro
+
+Com `--json`, a saída é sempre `{"ok": true, "dados": ...}` ou:
+
+```json
+{"ok": false, "erro": {"codigo": "nao_encontrado", "mensagem": "Recurso não encontrado.",
+  "proximo_passo": "notion-tasks perfis listar", "http_status": 404,
+  "notion_code": "object_not_found", "detalhes": {}}}
+```
+
+Decida pelo `codigo` (a lista completa está em `notion-tasks --json guia`, chave
+`erros`), não pelo texto. `detalhes` traz os dados estruturados: os blocos já
+criados, desfeitos ou pendentes numa escrita que parou (`escrita_parcial`,
+`limpeza_incompleta`, `reordenacao_incompleta`), os IDs que o Notion salvou num
+503 (`escrita_salva` — não repita a escrita) ou os problemas de um conteúdo que
+passa dos limites da API (`conteudo_invalido`). Argumento inválido também vira
+envelope (`uso_invalido`) e uma falha inesperada vira `erro_interno`, com o
+traceback no stderr. Código de saída: `0` sucesso; `2` uso inválido ou recusa
+antes de escrever (nada mudou); `1` falha da API, da rede, no meio de uma escrita
+ou interna. Itens de lote trazem `erro.codigo` com o mesmo vocabulário.
+
 Também funciona como módulo com `python -m cli ...`. Execute
 `notion-tasks --help` para consultar o guia completo e os demais subcomandos.
 

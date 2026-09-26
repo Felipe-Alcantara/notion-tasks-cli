@@ -11,10 +11,11 @@ import csv
 import json
 import os
 import sys
+import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 RAIZ = Path(__file__).resolve().parents[1]
 LOCAL_STARTER = RAIZ.parent / "notion-starter" / "src"
@@ -22,12 +23,9 @@ if LOCAL_STARTER.exists() and str(LOCAL_STARTER) not in sys.path:
     sys.path.insert(0, str(LOCAL_STARTER))
 
 from notion_starter import (  # noqa: E402
-    EscritaAbaixoDeDatabaseError,
     NotionAPIError,
     NotionClient,
-    NotionConfigurationError,
-    NotionHTTPError,
-    NotionSchemaError,
+    NotionHTTPError,  # noqa: E402, F401 - exposto como cli.NotionHTTPError
     TaskList,
     construir_inventario,
 )
@@ -44,6 +42,13 @@ from notion_starter.services import (  # noqa: E402
 )
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
 
+from cli.erros import (  # noqa: E402
+    CODIGOS_ERRO,
+    SAIDA_USO,
+    CLIError,
+    ErroClassificado,
+    classificar_erro,
+)
 from core import workspaces as perfis_workspace  # noqa: E402
 from core.config import carregar_env_file  # noqa: E402
 from integrations.github import GitHubClient  # noqa: E402
@@ -62,10 +67,6 @@ carregar_env_file()
 
 TaskListFactory = Callable[[], TaskList]
 ClientFactory = Callable[[], NotionClient]
-
-
-class CLIError(RuntimeError):
-    """Erro esperado de uso/configuração, seguro para exibir ao consumidor."""
 
 
 def _criar_client() -> NotionClient:
@@ -218,7 +219,31 @@ def _nomes_data_sources(fontes: list[dict[str, Any]]) -> list[str]:
 def _envelope(sucesso: bool, dados: Any = None, erro: str | None = None) -> dict[str, Any]:
     if sucesso:
         return {"ok": True, "dados": dados}
-    return {"ok": False, "erro": {"mensagem": erro or "Erro desconhecido."}}
+    return _envelope_erro(
+        ErroClassificado(
+            codigo="validacao", mensagem=erro or "Erro desconhecido.", saida=SAIDA_USO
+        )
+    )
+
+
+def _envelope_erro(erro: ErroClassificado) -> dict[str, Any]:
+    """``{"ok": false, "erro": {codigo, mensagem, proximo_passo, http_status,
+    notion_code, detalhes}}`` — sempre as mesmas chaves, para decidir por código."""
+
+    envelope: dict[str, Any] = {"ok": False, "erro": erro.para_dict()}
+    if erro.codigo == "escrita_abaixo_de_database":
+        # Compatibilidade: a lista também morava no topo do envelope.
+        envelope["databases_dentro"] = erro.detalhes.get("databases_dentro", [])
+    return envelope
+
+
+def _texto_erro(erro: ErroClassificado) -> str:
+    """Saída humana de um erro: a mensagem e, quando houver, o próximo passo."""
+
+    texto = f"Erro: {erro.mensagem}"
+    if erro.proximo_passo:
+        texto += f"\nPróximo passo: {erro.proximo_passo}"
+    return texto
 
 
 def _json(dados: Any) -> str:
@@ -1104,14 +1129,14 @@ def _referencia_entrada_lote(item: Any, *, criar: bool) -> dict[str, str]:
     return {"page_id": valor.strip()} if isinstance(valor, str) and valor.strip() else {}
 
 
-def _mensagem_erro_lote(erro: Exception) -> str:
-    """Converte falhas de rede/configuração para a mesma mensagem da CLI unitária."""
+def _erro_lote(erro: Exception) -> dict[str, Any]:
+    """O ``erro`` de um item de lote: mesma classificação da CLI unitária."""
 
-    if isinstance(erro, NotionConfigurationError):
-        return "Configuração do Notion inválida."
-    if isinstance(erro, NotionAPIError):
-        return _mensagem_erro_notion(erro)
-    return str(erro).strip() or type(erro).__name__
+    classificado = classificar_erro(erro)
+    return {
+        "codigo": classificado.codigo,
+        "mensagem": classificado.mensagem.strip() or type(erro).__name__,
+    }
 
 
 def _resultado_lote(
@@ -1137,7 +1162,7 @@ def _resultado_lote(
     if dados is not None:
         resultado["dados"] = dados
     if erro is not None:
-        resultado["erro"] = {"mensagem": _mensagem_erro_lote(erro)}
+        resultado["erro"] = _erro_lote(erro)
     return resultado
 
 
@@ -1874,7 +1899,10 @@ def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -
         if _sem_hifens(origem) == _sem_hifens(destino):
             item.update(
                 ok=False,
-                erro={"mensagem": "page_a e page_b são a mesma página — nada a relacionar."},
+                erro={
+                    "codigo": "validacao",
+                    "mensagem": "page_a e page_b são a mesma página — nada a relacionar.",
+                },
             )
             resultados.append(item)
             continue
@@ -1887,8 +1915,7 @@ def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -
                 cliente=cliente,
             )
         except (CLIError, ValueError, NotionAPIError) as exc:
-            mensagem = _mensagem_erro_notion(exc) if isinstance(exc, NotionAPIError) else str(exc)
-            item.update(ok=False, erro={"mensagem": mensagem})
+            item.update(ok=False, erro=_erro_lote(exc))
         else:
             item.update(ok=True, resultado=resultado)
         resultados.append(item)
@@ -2584,9 +2611,28 @@ def cmd_guia(args: argparse.Namespace) -> Any:
         "ferramenta": "cli notion (mesmos services da API e do MCP)",
         "dica": (
             "Use estes comandos em vez de chamar a API do Notion na mão. "
-            "Acrescente --json para saída estável {ok, dados}. Sufixo '--help' "
+            "Acrescente --json para saída estável: {ok: true, dados} ou {ok: false, "
+            "erro: {codigo, mensagem, proximo_passo, http_status, notion_code, "
+            "detalhes}}. Decida pelo 'codigo', não pelo texto. Sufixo '--help' "
             "em qualquer comando mostra os argumentos."
         ),
+        "erros": {
+            "codigos": list(CODIGOS_ERRO),
+            "saida": {
+                "0": "sucesso",
+                "1": "falha da API, da rede, no meio de uma escrita ou interna",
+                "2": "uso inválido ou recusa antes de escrever (nada mudou)",
+            },
+            "notas": [
+                "escrita_salva: o Notion GRAVOU e não respondeu a tempo — NÃO repita; "
+                "releia com 'blocos'/'conteudo' (detalhes.filhos_criados).",
+                "escrita_parcial / limpeza_incompleta / reordenacao_incompleta: a "
+                "escrita começou e parou; 'detalhes' diz o que foi gravado, apagado "
+                "ou ficou pendente, e 'proximo_passo' diz como conferir ou desfazer.",
+                "nao_encontrado: com perfil ativo, confira 'perfis listar' antes de "
+                "suspeitar de compartilhamento.",
+            ],
+        },
         "fluxo_recomendado": [
             "REGRA DO LINK: ao receber um link ou ID do Notion, LEIA e entenda "
             "do que se trata ANTES de qualquer mudança ('conteudo <id>'; se for "
@@ -2617,8 +2663,31 @@ def cmd_guia(args: argparse.Namespace) -> Any:
     }
 
 
+class _ErroDeArgumento(Exception):
+    """Argumento inválido, levantado no lugar do ``sys.exit`` do argparse."""
+
+    def __init__(self, parser: argparse.ArgumentParser, mensagem: str) -> None:
+        super().__init__(mensagem)
+        self.parser = parser
+        self.mensagem = mensagem
+
+
+class _ParserCLI(argparse.ArgumentParser):
+    """``ArgumentParser`` cujo erro de uso pode virar envelope JSON.
+
+    O ``error`` padrão imprime o uso no stderr e encerra o processo; a própria
+    documentação do método diz que, ao sobrescrevê-lo, ele deve encerrar ou
+    levantar uma exceção. Aqui levanta, e ``executar`` decide: com ``--json``,
+    envelope ``uso_invalido``; sem, o mesmo texto e código 2 de sempre. Os
+    subcomandos herdam a classe (``add_subparsers`` usa ``type(self)``).
+    """
+
+    def error(self, message: str) -> NoReturn:
+        raise _ErroDeArgumento(self, message)
+
+
 def construir_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ParserCLI(
         prog="python -m cli",
         description="CLI para IA operar tarefas do Notion via services.",
     )
@@ -3305,183 +3374,146 @@ def executar(
     tasklist_factory: TaskListFactory = _criar_tasklist,
     client_factory: ClientFactory = _criar_client,
 ) -> tuple[int, dict[str, Any] | str]:
+    """Roda um comando e devolve ``(código de saída, saída)``.
+
+    Com ``--json`` a saída é sempre um envelope — inclusive num argumento
+    inválido, que antes saía como texto do argparse no stderr — e nenhuma
+    exceção escapa como traceback: o que não tem tratamento próprio vira
+    ``erro_interno`` (o traceback vai para o stderr, para o diagnóstico).
+    """
+
     parser = construir_parser()
-    args = parser.parse_args(argv)
+    lista = list(argv) if argv is not None else sys.argv[1:]
     try:
-        comando = args.comando
-        if comando not in {"perfis", "guia"}:
-            perfis_workspace.aplicar_perfil(args.perfil)
-        if comando == "guia":
-            dados = cmd_guia(args)
-        elif comando == "perfis":
-            dados = cmd_perfis(args)
-        elif comando == "listar":
-            dados = cmd_listar(args, tasklist_factory=tasklist_factory)
-        elif comando == "ler":
-            dados = cmd_ler(args, tasklist_factory=tasklist_factory)
-        elif comando == "criar":
-            dados = cmd_criar(
-                args, tasklist_factory=tasklist_factory, client_factory=client_factory
-            )
-        elif comando == "editar":
-            dados = cmd_editar(args, tasklist_factory=tasklist_factory)
-        elif comando == "mover":
-            dados = cmd_mover(args, tasklist_factory=tasklist_factory)
-        elif comando == "concluir":
-            dados = cmd_concluir(args, tasklist_factory=tasklist_factory)
-        elif comando == "opcoes":
-            dados = cmd_opcoes(args, tasklist_factory=tasklist_factory)
-        elif comando == "databases":
-            dados = cmd_databases(args, client_factory=client_factory)
-        elif comando == "database-atual":
-            dados = cmd_database_atual(args, client_factory=client_factory)
-        elif comando == "escolher-database":
-            dados = cmd_escolher_database(args)
-        elif comando == "normalizar-nomes":
-            dados = cmd_normalizar_nomes(args, client_factory=client_factory)
-        elif comando == "mapear":
-            dados = cmd_mapear(args, client_factory=client_factory)
-        elif comando == "conteudo":
-            dados = cmd_conteudo(args, client_factory=client_factory)
-        elif comando == "exemplo":
-            dados = cmd_exemplo(args, client_factory=client_factory)
-        elif comando == "linhas":
-            dados = cmd_linhas(args, client_factory=client_factory)
-        elif comando == "blocos":
-            dados = cmd_blocos(args, client_factory=client_factory)
-        elif comando == "editar-linha":
-            dados = cmd_editar_linha(args, client_factory=client_factory)
-        elif comando == "escrever":
-            dados = cmd_escrever(args, client_factory=client_factory)
-        elif comando == "editar-bloco":
-            dados = cmd_editar_bloco(args, client_factory=client_factory)
-        elif comando == "apagar-bloco":
-            dados = cmd_apagar_bloco(args, client_factory=client_factory)
-        elif comando == "limpar":
-            dados = cmd_limpar(args, client_factory=client_factory)
-        elif comando == "schema":
-            dados = cmd_schema(args, client_factory=client_factory)
-        elif comando == "relacionar":
-            dados = cmd_relacionar(args, client_factory=client_factory)
-        elif comando == "relatorios-do-git":
-            dados = cmd_relatorios_do_git(args, client_factory=client_factory)
-        elif comando == "relatorio-do-dia":
-            dados = cmd_relatorio_do_dia(args, client_factory=client_factory)
-        elif comando == "buscar":
-            dados = cmd_buscar(args, client_factory=client_factory)
-        elif comando == "clonar-database":
-            dados = cmd_clonar_database(args, client_factory=client_factory)
-        elif comando == "criar-subpagina":
-            dados = cmd_criar_subpagina(args, client_factory=client_factory)
-        elif comando == "inspecionar-estrutura":
-            dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
-        elif comando == "clonar-estrutura":
-            dados = cmd_clonar_estrutura(args, client_factory=client_factory)
-        elif comando == "montar-estrutura-projeto":
-            dados = cmd_montar_estrutura_projeto(args, client_factory=client_factory)
-        elif comando == "reordenar-bloco":
-            dados = cmd_reordenar_bloco(args, client_factory=client_factory)
-        elif comando == "garantir-coluna":
-            dados = cmd_garantir_coluna(args, client_factory=client_factory)
-        elif comando == "renomear-coluna":
-            dados = cmd_renomear_coluna(args, client_factory=client_factory)
-        elif comando == "atualizar-github":
-            dados = cmd_atualizar_github(args, client_factory=client_factory)
-        elif comando == "exportar-docx":
-            dados = cmd_exportar_docx(args, client_factory=client_factory)
-        elif comando == "criar-database":
-            dados = cmd_criar_database(args, client_factory=client_factory)
-        elif comando == "importar-planilha":
-            dados = cmd_importar_planilha(args, client_factory=client_factory)
-        elif comando == "anexar-arquivo":
-            dados = cmd_anexar_arquivo(args, client_factory=client_factory)
-        elif comando == "mover-pagina":
-            dados = cmd_mover_pagina(args, client_factory=client_factory)
-        elif comando == "mover-database":
-            dados = cmd_mover_database(args, client_factory=client_factory)
-        elif comando == "renomear-database":
-            dados = cmd_renomear_database(args, client_factory=client_factory)
-        else:
-            raise CLIError(f"Comando desconhecido: {comando}")
-        return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(comando, dados)
-    except EscritaAbaixoDeDatabaseError as exc:
-        # Erro de uso, não falha técnica: a mensagem ensina o caminho certo e
-        # precisa chegar inteira. Traceback aqui só atrapalha quem lê — pessoa
-        # ou modelo.
-        dados = _envelope(False, erro=str(exc))
-        dados["databases_dentro"] = [
-            {"id": database_id, "titulo": titulo or "(sem título)"}
-            for database_id, titulo in exc.databases
-        ]
-        return 2, dados if args.json else f"Erro: {exc}"
-    except NotionSchemaError as exc:
-        # Erro de uso: a coluna pedida não existe ou é de outro tipo. Falhamos
-        # antes de chamar a API, então a mensagem pode ensinar o caminho certo.
-        mensagem = f"{exc} — rode 'schema <database_id>' para ver as colunas reais."
-        return 2, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
-    except (CLIError, ValueError, perfis_workspace.WorkspaceConfigError) as exc:
-        return 2, _envelope(False, erro=str(exc)) if args.json else f"Erro: {exc}"
-    except (NotionHTTPError, NotionAPIError) as exc:
-        mensagem = _mensagem_erro_notion(exc)
-        return 1, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
-    except NotionConfigurationError:
-        mensagem = "Configuração do Notion inválida."
-        return 2, _envelope(False, erro=mensagem) if args.json else f"Erro: {mensagem}"
-
-
-def _mensagem_erro_notion(exc: NotionAPIError) -> str:
-    """Traduz a falha da API numa mensagem que diz o que fazer a seguir.
-
-    Antes, todo erro que não fosse 404 virava "Falha ao falar com o Notion." — e
-    a resposta 400 do Notion, que nomeia exatamente a propriedade recusada,
-    era descartada. Quem lê (pessoa ou modelo) ficava sem o único dado útil.
-    """
-
-    if not isinstance(exc, NotionHTTPError):
-        return "Falha ao falar com o Notion."
-    if exc.status_code == 404:
-        return f"Recurso não encontrado.{_sufixo_perfil_ativo()}"
-    return f"Notion recusou a requisição (HTTP {exc.status_code}): {_detalhe_notion(exc.body)}"
-
-
-def _sufixo_perfil_ativo() -> str:
-    """Nomeia o perfil ativo junto de um 404, para fechar em código a regra que a
-    prosa só lembrava: "ID válido devolvendo 404 quase nunca é permissão — é o
-    perfil salvo apontando pra outro workspace, e ele vence o NOTION_TOKEN do
-    ambiente em silêncio". Sem isso, confirmar a suspeita custava outra chamada
-    (``perfis listar``); com isso, o nome já vem junto do próprio erro.
-
-    Best-effort: uma falha ao ler o arquivo de perfis (ausente, corrompido) não
-    pode esconder o 404 original atrás de um traceback novo.
-    """
+        args = parser.parse_args(lista)
+    except _ErroDeArgumento as exc:
+        if "--json" not in lista:
+            # Sem --json, o comportamento do argparse: uso + erro no stderr.
+            exc.parser.exit(SAIDA_USO, f"{exc.parser.format_usage()}{exc.parser.prog}: "
+                            f"error: {exc.mensagem}\n")
+        erro = ErroClassificado(
+            codigo="uso_invalido",
+            mensagem=f"{exc.mensagem} (veja '{exc.parser.prog} --help')",
+            saida=SAIDA_USO,
+            proximo_passo=f"{exc.parser.prog} --help",
+        )
+        return erro.saida, _envelope_erro(erro)
     try:
-        alias = perfis_workspace.carregar_store().ativo
-    except Exception:
-        return ""
-    if not alias:
-        return ""
-    return (
-        f" Perfil ativo: '{alias}' — se o ID existe noutro workspace, confira "
-        "com 'perfis listar' antes de investigar compartilhamento com a integração."
-    )
+        dados = _despachar(args, tasklist_factory=tasklist_factory, client_factory=client_factory)
+        return 0, _envelope(True, dados=dados) if args.json else _formatar_humano(
+            args.comando, dados
+        )
+    except Exception as exc:  # noqa: BLE001 - fronteira: nenhum traceback no lugar do JSON
+        erro = classificar_erro(exc)
+        if erro.codigo == "erro_interno":
+            traceback.print_exc(file=sys.stderr)
+        return erro.saida, _envelope_erro(erro) if args.json else _texto_erro(erro)
 
 
-def _detalhe_notion(corpo: str) -> str:
-    """Extrai o ``message`` do corpo de erro do Notion, com o cru de reserva."""
+def _despachar(
+    args: argparse.Namespace,
+    *,
+    tasklist_factory: TaskListFactory,
+    client_factory: ClientFactory,
+) -> Any:
+    """Chama o ``cmd_*`` do subcomando e devolve os dados de sucesso."""
 
-    texto = (corpo or "").strip()
-    if not texto:
-        return "sem detalhe na resposta"
-    try:
-        dados = json.loads(texto)
-    except ValueError:
-        return texto
-    if isinstance(dados, dict):
-        mensagem = str(dados.get("message") or "").strip()
-        codigo = str(dados.get("code") or "").strip()
-        if mensagem:
-            return f"{mensagem} [{codigo}]" if codigo else mensagem
-    return texto
+    comando = args.comando
+    if comando not in {"perfis", "guia"}:
+        perfis_workspace.aplicar_perfil(args.perfil)
+    if comando == "guia":
+        dados = cmd_guia(args)
+    elif comando == "perfis":
+        dados = cmd_perfis(args)
+    elif comando == "listar":
+        dados = cmd_listar(args, tasklist_factory=tasklist_factory)
+    elif comando == "ler":
+        dados = cmd_ler(args, tasklist_factory=tasklist_factory)
+    elif comando == "criar":
+        dados = cmd_criar(
+            args, tasklist_factory=tasklist_factory, client_factory=client_factory
+        )
+    elif comando == "editar":
+        dados = cmd_editar(args, tasklist_factory=tasklist_factory)
+    elif comando == "mover":
+        dados = cmd_mover(args, tasklist_factory=tasklist_factory)
+    elif comando == "concluir":
+        dados = cmd_concluir(args, tasklist_factory=tasklist_factory)
+    elif comando == "opcoes":
+        dados = cmd_opcoes(args, tasklist_factory=tasklist_factory)
+    elif comando == "databases":
+        dados = cmd_databases(args, client_factory=client_factory)
+    elif comando == "database-atual":
+        dados = cmd_database_atual(args, client_factory=client_factory)
+    elif comando == "escolher-database":
+        dados = cmd_escolher_database(args)
+    elif comando == "normalizar-nomes":
+        dados = cmd_normalizar_nomes(args, client_factory=client_factory)
+    elif comando == "mapear":
+        dados = cmd_mapear(args, client_factory=client_factory)
+    elif comando == "conteudo":
+        dados = cmd_conteudo(args, client_factory=client_factory)
+    elif comando == "exemplo":
+        dados = cmd_exemplo(args, client_factory=client_factory)
+    elif comando == "linhas":
+        dados = cmd_linhas(args, client_factory=client_factory)
+    elif comando == "blocos":
+        dados = cmd_blocos(args, client_factory=client_factory)
+    elif comando == "editar-linha":
+        dados = cmd_editar_linha(args, client_factory=client_factory)
+    elif comando == "escrever":
+        dados = cmd_escrever(args, client_factory=client_factory)
+    elif comando == "editar-bloco":
+        dados = cmd_editar_bloco(args, client_factory=client_factory)
+    elif comando == "apagar-bloco":
+        dados = cmd_apagar_bloco(args, client_factory=client_factory)
+    elif comando == "limpar":
+        dados = cmd_limpar(args, client_factory=client_factory)
+    elif comando == "schema":
+        dados = cmd_schema(args, client_factory=client_factory)
+    elif comando == "relacionar":
+        dados = cmd_relacionar(args, client_factory=client_factory)
+    elif comando == "relatorios-do-git":
+        dados = cmd_relatorios_do_git(args, client_factory=client_factory)
+    elif comando == "relatorio-do-dia":
+        dados = cmd_relatorio_do_dia(args, client_factory=client_factory)
+    elif comando == "buscar":
+        dados = cmd_buscar(args, client_factory=client_factory)
+    elif comando == "clonar-database":
+        dados = cmd_clonar_database(args, client_factory=client_factory)
+    elif comando == "criar-subpagina":
+        dados = cmd_criar_subpagina(args, client_factory=client_factory)
+    elif comando == "inspecionar-estrutura":
+        dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
+    elif comando == "clonar-estrutura":
+        dados = cmd_clonar_estrutura(args, client_factory=client_factory)
+    elif comando == "montar-estrutura-projeto":
+        dados = cmd_montar_estrutura_projeto(args, client_factory=client_factory)
+    elif comando == "reordenar-bloco":
+        dados = cmd_reordenar_bloco(args, client_factory=client_factory)
+    elif comando == "garantir-coluna":
+        dados = cmd_garantir_coluna(args, client_factory=client_factory)
+    elif comando == "renomear-coluna":
+        dados = cmd_renomear_coluna(args, client_factory=client_factory)
+    elif comando == "atualizar-github":
+        dados = cmd_atualizar_github(args, client_factory=client_factory)
+    elif comando == "exportar-docx":
+        dados = cmd_exportar_docx(args, client_factory=client_factory)
+    elif comando == "criar-database":
+        dados = cmd_criar_database(args, client_factory=client_factory)
+    elif comando == "importar-planilha":
+        dados = cmd_importar_planilha(args, client_factory=client_factory)
+    elif comando == "anexar-arquivo":
+        dados = cmd_anexar_arquivo(args, client_factory=client_factory)
+    elif comando == "mover-pagina":
+        dados = cmd_mover_pagina(args, client_factory=client_factory)
+    elif comando == "mover-database":
+        dados = cmd_mover_database(args, client_factory=client_factory)
+    elif comando == "renomear-database":
+        dados = cmd_renomear_database(args, client_factory=client_factory)
+    else:
+        raise CLIError(f"Comando desconhecido: {comando}")
+    return dados
 
 
 def _garantir_saida_utf8() -> None:

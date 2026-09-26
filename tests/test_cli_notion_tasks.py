@@ -267,6 +267,10 @@ class FakeClient:
         self.chamadas.append(("excluir_bloco", block_id))
         return {"id": block_id, "archived": True}
 
+    def restaurar_bloco(self, block_id):
+        self.chamadas.append(("restaurar_bloco", block_id))
+        return {"id": block_id, "in_trash": False}
+
     def criar_subpagina(self, pagina_pai_id, titulo, *, blocos=None):
         self.chamadas.append(("criar_subpagina", (pagina_pai_id, titulo)))
         return {"id": f"sub-{titulo}", "url": f"https://notion.so/sub-{titulo}"}
@@ -446,7 +450,14 @@ def test_editar_exige_ao_menos_um_campo():
     assert codigo == 2
     assert saida == {
         "ok": False,
-        "erro": {"mensagem": "Informe ao menos um campo para editar."},
+        "erro": {
+            "codigo": "validacao",
+            "mensagem": "Informe ao menos um campo para editar.",
+            "proximo_passo": None,
+            "http_status": None,
+            "notion_code": None,
+            "detalhes": {},
+        },
     }
 
 
@@ -756,6 +767,8 @@ def test_editar_linha_lote_reutiliza_cliente_e_continua_depois_de_erro(
     assert dados["resultados"][1]["page_id"] == "ruim"
     assert dados["resultados"][1]["estado"] == "erro"
     assert "falha da linha de teste" in dados["resultados"][1]["erro"]["mensagem"]
+    # O item de lote usa o mesmo vocabulário de códigos do envelope de topo.
+    assert dados["resultados"][1]["erro"]["codigo"] == "validacao"
     assert chamadas_factory == 1
     assert [chamada[1][0] for chamada in cliente.chamadas if chamada[0] == "atualizar_pagina"] == [
         "p1",
@@ -1005,10 +1018,9 @@ def test_exemplo_rejeita_quantidade_fora_do_intervalo():
     codigo, saida = _executar(["--json", "exemplo", "--n", "5"])
 
     assert codigo == 2
-    assert saida == {
-        "ok": False,
-        "erro": {"mensagem": "'--n' deve estar entre 2 e 4."},
-    }
+    assert saida["ok"] is False
+    assert saida["erro"]["codigo"] == "validacao"
+    assert saida["erro"]["mensagem"] == "'--n' deve estar entre 2 e 4."
 
 
 def test_linhas_lista_linhas_do_database():
@@ -1935,6 +1947,123 @@ def test_erro_404_nomeia_o_perfil_ativo(tmp_path: Path):
     assert mensagem.startswith("Recurso não encontrado.")
     assert "'relatorios'" in mensagem
     assert "perfis listar" in mensagem
+
+
+def test_erro_404_traz_codigo_status_e_code_do_notion():
+    """O agente decide pelo código, não pelo texto em português."""
+
+    corpo = '{"object": "error", "status": 404, "code": "object_not_found", "message": "x"}'
+    codigo, saida = _executar(["--json", "buscar", "x"], client=ClienteQueRecusa(404, corpo))
+
+    assert codigo == 1
+    erro = saida["erro"]
+    assert erro["codigo"] == "nao_encontrado"
+    assert erro["http_status"] == 404
+    assert erro["notion_code"] == "object_not_found"
+    assert erro["proximo_passo"] == "notion-tasks perfis listar"
+
+
+def test_argumento_invalido_com_json_vira_envelope():
+    """Antes o argparse imprimia o uso no stderr e saía sem JSON."""
+
+    codigo, saida = _executar(["--json", "reordenar-bloco"])
+
+    assert codigo == 2
+    assert saida["ok"] is False
+    assert saida["erro"]["codigo"] == "uso_invalido"
+    assert "bloco_id" in saida["erro"]["mensagem"]
+
+
+def test_argumento_invalido_sem_json_mantem_o_argparse():
+    import pytest
+
+    with pytest.raises(SystemExit) as saida:
+        _executar(["reordenar-bloco"])
+    assert saida.value.code == 2
+
+
+def test_excecao_inesperada_vira_erro_interno_sem_quebrar_o_json(capsys):
+    class ClienteQueQuebra(FakeClient):
+        def buscar(self, *args, **kwargs):
+            raise KeyError("campo_inesperado")
+
+    codigo, saida = _executar(["--json", "buscar", "x"], client=ClienteQueQuebra())
+
+    assert codigo == 1
+    assert saida["erro"]["codigo"] == "erro_interno"
+    assert saida["erro"]["detalhes"] == {"tipo": "KeyError"}
+    # O diagnóstico não se perde: o traceback vai para o stderr.
+    assert "KeyError" in capsys.readouterr().err
+
+
+def test_escrita_parcial_vira_envelope_json_com_o_que_ficou():
+    """EscritaParcialError (RuntimeError) escapava do executar como traceback."""
+
+    from notion_starter import NotionHTTPError
+
+    class ClienteQueRecusaAnexar(FakeClient):
+        def anexar_blocos(self, block_id, blocos, **posicao):
+            raise NotionHTTPError(
+                400,
+                '{"object": "error", "status": 400, "code": "validation_error", '
+                '"message": "body failed validation"}',
+            )
+
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "texto novo", "--substituir"],
+        client=ClienteQueRecusaAnexar(),
+    )
+
+    assert codigo == 1
+    erro = saida["erro"]
+    assert erro["codigo"] == "escrita_parcial"
+    assert erro["http_status"] == 400
+    assert erro["notion_code"] == "validation_error"
+    assert erro["detalhes"]["substituicao"] is True
+    assert erro["detalhes"]["blocos_criados"] == []
+    assert "body failed validation" in erro["mensagem"]
+
+
+def test_escrita_salva_pelo_notion_nao_parece_recusa():
+    """503 com a escrita salva: o texto "Notion recusou" levava a repetir e duplicar."""
+
+    from notion_starter.exceptions import NotionEscritaSalvaError
+
+    corpo = (
+        '{"object": "error", "status": 503, "code": "service_unavailable", '
+        '"message": "The change was saved", "additional_data": '
+        '{"committed_resource_id": "sub-nova", "retry_guidance": "Do not repeat the write."}}'
+    )
+
+    class ClienteSalvaSemResponder(FakeClient):
+        def criar_subpagina(self, pagina_pai_id, titulo, *, blocos=None):
+            raise NotionEscritaSalvaError(503, corpo)
+
+    codigo, saida = _executar(
+        ["--json", "criar-subpagina", "pai", "Nova"], client=ClienteSalvaSemResponder()
+    )
+
+    assert codigo == 1
+    erro = saida["erro"]
+    assert erro["codigo"] == "escrita_salva"
+    assert not erro["mensagem"].startswith("Notion recusou")
+    assert "NÃO repita" in erro["mensagem"]
+    assert erro["detalhes"]["recurso_id"] == "sub-nova"
+
+
+def test_escrita_abaixo_de_database_mantem_a_lista_no_topo_e_em_detalhes():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "db9", "type": "child_database", "child_database": {"title": "Tarefas"}}
+    ]
+    codigo, saida = _executar(["--json", "escrever", "page1", "texto"], client=client)
+
+    assert codigo == 2
+    assert saida["erro"]["codigo"] == "escrita_abaixo_de_database"
+    esperado = [{"id": "db9", "titulo": "Tarefas"}]
+    assert saida["databases_dentro"] == esperado
+    assert saida["erro"]["detalhes"]["databases_dentro"] == esperado
+    assert saida["erro"]["proximo_passo"] == "notion-tasks linhas db9"
 
 
 def test_erro_404_sem_perfil_ativo_mantem_a_mensagem_curta():
