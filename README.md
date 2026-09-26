@@ -185,6 +185,24 @@ de aprovar essa etapa, os assets precisam passar pelo processo de assinatura e
 notarização da task correspondente. A task de empacotamento não altera a Release
 `0.3.0` existente.
 
+### Dependência do notion-starter e ordem de release
+
+A CLI exige `notion-starter>=0.4.0,<0.5.0`. Ela importa no topo APIs que só
+existem a partir do `0.4.0` (exceções de escrita segura, `normalizar_id`,
+`services.backups`); com um starter anterior, **nenhum** comando abre, nem
+`--help`. A ordem de publicação é:
+
+1. tag do `notion-starter` (`v0.4.0`), que o leva ao PyPI;
+2. release do `notion-workspace-app` com faixa que aceite o starter novo — sem
+   isso, `notion-automacoes[app]` não resolve, porque o app publicado exige
+   `notion-starter<0.4.0`;
+3. só então a tag desta CLI, que dispara o PyPI e os binários nativos.
+
+Enquanto o starter `0.4.0` não estiver no PyPI, a CI desta CLI falha já na
+instalação. É essa falha que impede publicar uma CLI que não abre.
+`tests/test_pyproject.py` falha quando a suíte testa um starter fora da faixa
+declarada ou de outra série que o piso.
+
 Prefere um passo a passo guiado? Clone o repositório e use o menu:
 
 ```bash

@@ -42,7 +42,11 @@ resolução no ambiente consumidor.
 
 O pacote público `notion-automacoes` (`0.3.0`) expõe a fachada unificada e
 mantém o executável histórico `notion-tasks`. A dependência do `notion-starter` é
-uma faixa versionada (`>=0.3.0,<0.4.0`), sem URL Git em `Requires-Dist`; o extra
+uma faixa versionada (`>=0.4.0,<0.5.0`), sem URL Git em `Requires-Dist`. O piso
+é a série do starter que a suíte testa (`tests/test_pyproject.py`), porque a CLI
+importa a API dele no topo do módulo: com um starter mais antigo, a CLI inteira
+não importa (nenhum comando abre, nem `--help`), não é só um comando que falha.
+Por isso o starter é publicado antes da CLI; a ordem está no README. O extra
 `app` adiciona o app Django/MCP. Wheel e sdist são validados por `twine check` e
 publicados no [PyPI](https://pypi.org/project/notion-automacoes/) por Trusted
 Publishing. A titularidade legal declarada no pacote é `Felipe Alcantara`.

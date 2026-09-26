@@ -866,3 +866,34 @@ CRLF no stdin, lista recuada por igual em `escrever` (stdin) e em `criar`
 recusado. Na API real, na sandbox: stdin, `--arquivo-md` e CRLF gravaram o
 código com o recuo e sem `\r` (conferido por `GET`), e `escrever` com
 `  - a` / `  - b` criou dois itens de topo sem filhos.
+
+### A CLI não importava com o starter publicado (correção do risco registrado)
+
+**O risco estava subestimado.** O registro anterior disse que a faixa
+`notion-starter>=0.3.0,<0.4.0` "precisa acompanhar a próxima versão
+publicada", e o relato da execução falava em comandos novos virando
+`erro_interno`. Não é isso: `cli/notion_tasks.py` e `cli/erros.py` importam no
+topo nomes que só existem no starter local (`EdicaoMultiblocoError`,
+`normalizar_id`, `chave_de_id`, `ReordenacaoIncompletaError`…), e
+`tests/conftest.py` importa `notion_starter.services.backups`. Reproduzido com
+o `origin/main` do starter (`git archive`, `0.3.1`, a mesma versão do PyPI) na
+frente do `sys.path`: `python -m cli --help` sai com `ImportError: cannot import
+name 'EdicaoMultiblocoError'`. **A CLI inteira não abre**, nem `--help`,
+`guia` ou `perfis`; a CI (que instala só esta CLI e resolve o starter do PyPI)
+quebraria já no `conftest`, e uma tag geraria um binário nativo que não abre.
+
+**Decisão.** A faixa passou a `notion-starter>=0.4.0,<0.5.0` e a CLI a `0.5.0`
+(`pyproject.toml`, `cli/versao.py`), no mesmo commit. O starter subiu para
+`0.4.0` no repositório dele. Até o `0.4.0` estar no PyPI, a instalação da CI e
+dos workflows de release falha: é a trava de ordem. `tests/test_pyproject.py`
+(novo) falha quando a suíte testa um starter fora da faixa ou de outra série
+que o piso, e quando `VERSAO_FONTE` diverge do `pyproject.toml`.
+
+**Ordem de publicação.** (1) push e tag `v0.4.0` do `notion-starter`; (2)
+release do `notion-workspace-app` com a faixa do starter aberta para `<0.5.0`
+(hoje o app publicado, `0.3.0`, exige `<0.4.0`, e `notion-automacoes[app]` não
+resolveria); (3) push e tag desta CLI. O app não foi alterado nesta execução.
+
+**Validação.** `ruff check .` limpo e `python -m pytest` com 333 testes. Os três
+testes de `tests/test_pyproject.py` falham com o `pyproject.toml` anterior
+(conferido restaurando o arquivo do `HEAD`) e passam agora.
