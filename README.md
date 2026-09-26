@@ -235,7 +235,7 @@ notion-tasks relacionar --coluna "Subtarefas relacionadas" \
 notion-tasks relacionar --coluna "Subtarefas relacionadas" --arquivo pares.json
 
 # Conteúdo de páginas
-notion-tasks conteudo <id>
+notion-tasks conteudo <id>          # propriedades, corpo e o pai (database da linha)
 notion-tasks blocos <id>
 notion-tasks blocos <id> --metadados --completo      # carimbos e texto inteiro
 notion-tasks blocos <id> --recursivo --contendo "x"  # acha o ID de um bloco aninhado

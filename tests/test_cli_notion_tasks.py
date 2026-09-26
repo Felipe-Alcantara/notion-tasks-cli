@@ -1845,6 +1845,34 @@ def test_conteudo_de_pagina_sem_corpo_nao_inventa_linhas():
     }
 
 
+class FakeLinhaClient(FakeClient):
+    def obter_pagina(self, page_id):
+        pagina = super().obter_pagina(page_id)
+        pagina.update(
+            parent={"type": "database_id", "database_id": "db9"},
+            url="https://www.notion.so/linha-page1",
+            created_time="2026-09-20T10:00:00.000Z",
+            last_edited_time="2026-09-25T23:00:00.000Z",
+        )
+        return pagina
+
+
+def test_conteudo_diz_o_database_da_linha_e_quando_mudou():
+    """Sem o pai, o agente não sabia em qual database rodar 'schema'."""
+
+    codigo, saida = _executar(["--json", "conteudo", "page1"], client=FakeLinhaClient())
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["pai"] == {"tipo": "database_id", "id": "db9"}
+    assert dados["url"] == "https://www.notion.so/linha-page1"
+    assert dados["editado_em"] == "2026-09-25T23:00:00.000Z"
+
+    codigo, texto = _executar(["conteudo", "page1"], client=FakeLinhaClient())
+    assert codigo == 0
+    assert texto.splitlines()[0] == "Linha do database db9 (schema: 'schema db9')"
+    assert "Editada em: 2026-09-25T23:00:00.000Z" in texto
+
+
 def test_conteudo_traz_propriedades_antes_do_corpo():
     codigo, saida = _executar(["conteudo", "page1"])
     assert codigo == 0

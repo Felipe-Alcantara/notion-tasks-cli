@@ -397,6 +397,28 @@ def _formatar_lote(dados: dict[str, Any]) -> str:
     return "\n".join(linhas)
 
 
+def _contexto_da_pagina(dados: Mapping[str, Any]) -> str:
+    """Onde a página mora, a URL e quando mudou — só o que a leitura trouxe."""
+
+    linhas: list[str] = []
+    pai = dados.get("pai") or {}
+    tipo = pai.get("tipo")
+    pai_id = pai.get("database_id") or pai.get("id")
+    if tipo in ("database_id", "data_source_id") and pai_id:
+        linhas.append(f"Linha do database {pai_id} (schema: 'schema {pai_id}')")
+    elif tipo == "page_id" and pai_id:
+        linhas.append(f"Subpágina de {pai_id}")
+    elif tipo == "block_id" and pai_id:
+        linhas.append(f"Dentro do bloco {pai_id}")
+    elif tipo == "workspace":
+        linhas.append("Página na raiz do workspace")
+    if dados.get("url"):
+        linhas.append(f"URL: {dados['url']}")
+    if dados.get("editado_em"):
+        linhas.append(f"Editada em: {dados['editado_em']}")
+    return "\n".join(linhas)
+
+
 def _formatar_humano(comando: str, dados: Any) -> str:
     if isinstance(dados, dict) and dados.get("modo") == "lote":
         return _formatar_lote(dados)
@@ -422,8 +444,12 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             tabela = "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
             return f"{cabecalho}\n\n{tabela}"
         # Página = propriedades + corpo: as propriedades vêm PRIMEIRO, porque
-        # há páginas com mais informação nas colunas do que no corpo.
+        # há páginas com mais informação nas colunas do que no corpo. Antes
+        # delas, onde a página mora (numa linha, o database para 'schema').
         partes: list[str] = []
+        contexto = _contexto_da_pagina(dados)
+        if contexto:
+            partes.append(contexto)
         propriedades = dados.get("propriedades") or {}
         if propriedades:
             linhas_props = "\n".join(
@@ -3437,7 +3463,12 @@ def construir_parser() -> argparse.ArgumentParser:
     mapear.add_argument("--page-size", type=int, default=100)
     mapear.add_argument("--limite-duplicatas", type=int, default=10)
 
-    conteudo = sub.add_parser("conteudo", help="lê o conteúdo de uma página como Markdown")
+    conteudo = sub.add_parser(
+        "conteudo",
+        help="lê uma página: propriedades, corpo em Markdown e, quando a API traz, "
+        "'pai' {tipo, id} (numa linha de database, o database para 'schema'), 'url', "
+        "'criado_em' e 'editado_em'; num database, as linhas",
+    )
     conteudo.add_argument("page_id")
 
     exemplo = sub.add_parser(
