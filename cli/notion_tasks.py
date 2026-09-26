@@ -3317,8 +3317,11 @@ def cmd_guia(args: argparse.Namespace) -> Any:
             "INSERIR num ponto, 'escrever ... --apos <block_id>' ou '--inicio' (não "
             "use 'reordenar-bloco' para isso: ele apaga e recria).",
             "Para corrigir/reescrever uma página: veja os blocos com ID em "
-            "'blocos <page_id>', então 'apagar-bloco'/'editar-bloco' por ID, ou "
-            "'limpar <page_id> --sim' para zerar e reescrever do zero.",
+            "'blocos <page_id>' ('--contendo \"trecho\"' acha o bloco pelo texto; "
+            "'ler-bloco <id>' lê um só), então 'editar-bloco' por ID ('--trocar/--por' "
+            "muda só um trecho sem perder cor, sublinhado nem menções) ou "
+            "'apagar-bloco', ou 'escrever --substituir' para trocar o corpo. Tudo o "
+            "que apaga devolve os IDs e o comando 'restaurar-bloco' em 'desfazer'.",
         ],
         "comandos": comandos,
     }
