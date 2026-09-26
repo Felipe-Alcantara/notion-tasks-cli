@@ -44,10 +44,12 @@ from notion_starter.services import relatorios_docx as svc_relatorios_docx  # no
 
 from cli.erros import (  # noqa: E402
     CODIGOS_ERRO,
+    SAIDA_FALHA,
     SAIDA_USO,
     CLIError,
     ErroClassificado,
     classificar_erro,
+    comando_restaurar,
 )
 from core import workspaces as perfis_workspace  # noqa: E402
 from core.config import carregar_env_file  # noqa: E402
@@ -1656,19 +1658,40 @@ def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> 
         "substituiu": args.substituir,
     }
     if resultado.limpeza is not None:
-        saida["blocos_apagados"] = resultado.limpeza.apagados
         # Dizer o que foi mantido é o ponto: quem substituiu precisa saber que a
         # imagem/subpágina continua na página e o texto novo entrou depois dela.
-        saida["blocos_preservados"] = [
-            {"id": bloco_id, "tipo": tipo} for bloco_id, tipo in resultado.preservados
-        ]
+        saida.update(_dados_limpeza(resultado.limpeza))
         if resultado.preservados:
             saida["aviso"] = (
                 "Preservados blocos que não se recriam a partir de Markdown "
                 f"({', '.join(resultado.limpeza.tipos_preservados)}); o conteúdo novo "
-                "entrou depois deles. Use --apagar-tudo para apagá-los também."
+                "entrou depois deles (o motivo de cada um está em blocos_preservados). "
+                "Use --apagar-tudo para apagá-los também."
             )
     return saida
+
+
+def _dados_limpeza(limpeza: svc_conteudo.ResultadoLimpeza) -> dict[str, Any]:
+    """O que ``limpar`` e ``escrever --substituir`` apagaram e mantiveram.
+
+    ``blocos_apagados`` continua sendo a contagem (contrato antigo); os IDs
+    vêm em ``blocos_apagados_ids``, porque é com eles que a API restaura —
+    ``desfazer`` traz o comando pronto.
+    """
+
+    dados: dict[str, Any] = {
+        "blocos_apagados": limpeza.apagados,
+        "blocos_apagados_ids": [
+            {"id": bloco_id, "tipo": tipo} for bloco_id, tipo in limpeza.apagados_ids
+        ],
+        "blocos_preservados": [
+            {"id": bloco_id, "tipo": tipo, "motivo": limpeza.motivos.get(bloco_id, "")}
+            for bloco_id, tipo in limpeza.preservados
+        ],
+    }
+    if limpeza.apagados_ids:
+        dados["desfazer"] = comando_restaurar([bloco_id for bloco_id, _ in limpeza.apagados_ids])
+    return dados
 
 
 def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -1684,20 +1707,44 @@ def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
         incluir_nao_recriaveis=getattr(args, "apagar_tudo", False),
         cliente=client_factory(),
     )
-    saida: dict[str, Any] = {
-        "id": page_id,
-        "blocos_apagados": resultado.apagados,
-        "blocos_preservados": [
-            {"id": bloco_id, "tipo": tipo} for bloco_id, tipo in resultado.preservados
-        ],
-    }
+    saida: dict[str, Any] = {"id": page_id, **_dados_limpeza(resultado)}
     if resultado.preservados:
         saida["aviso"] = (
             "Preservados blocos que não se recriam a partir de Markdown "
-            f"({', '.join(resultado.tipos_preservados)}). "
-            "Use --apagar-tudo para apagá-los também."
+            f"({', '.join(resultado.tipos_preservados)}); o motivo de cada um está em "
+            "blocos_preservados. Use --apagar-tudo para apagá-los também."
         )
     return saida
+
+
+def cmd_restaurar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Tira blocos da lixeira pelo ID — o desfazer de ``limpar``/``apagar-bloco``.
+
+    Aceita vários IDs (o normal é desfazer um ``limpar`` inteiro, cujo
+    ``desfazer`` já traz o comando). Um ID que falhar não interrompe os demais;
+    se nenhum voltar, é erro.
+    """
+
+    ids = [_texto_obrigatorio(valor, "block_id") for valor in args.block_ids]
+    resultado = svc_conteudo.restaurar_blocos(ids, cliente=client_factory())
+    falhas = [{"id": bloco_id, "motivo": motivo} for bloco_id, motivo in resultado.falhas]
+    if falhas and not resultado.restaurados:
+        raise CLIError(
+            "Nenhum bloco foi restaurado: "
+            + "; ".join(f"{item['id']}: {item['motivo']}" for item in falhas),
+            codigo="restauracao_falhou",
+            saida=SAIDA_FALHA,
+            detalhes={"falhas": falhas},
+        )
+    return {
+        "restaurados": resultado.restaurados,
+        "falhas": falhas,
+        "aviso": (
+            "Os blocos restaurados voltam no FIM da página, com o mesmo ID e os "
+            "filhos (a API não os devolve à posição original); use 'reordenar-bloco' "
+            "para reposicioná-los."
+        ),
+    }
 
 
 def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -2475,6 +2522,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json limpar <page_id> --sim",
         "python -m cli --json limpar <page_id> --sim --apagar-tudo",
     ],
+    "restaurar-bloco": [
+        "python -m cli --json restaurar-bloco <block_id>",
+        "python -m cli --json restaurar-bloco <id1> <id2> <id3>  # o 'desfazer' do limpar",
+    ],
     "relatorios-do-git": [
         'python -m cli --json relatorios-do-git --database <id> --dry-run '
         '--descobrir ~/Programacao/Github/Repositorios',
@@ -2885,10 +2936,14 @@ def construir_parser() -> argparse.ArgumentParser:
     escrever.add_argument(
         "--substituir",
         action="store_true",
-        help="apaga o corpo atual antes de escrever — a página fica só com este "
-        "conteúdo (evita ir empilhando blocos ao corrigir/reescrever). Blocos que "
-        "não se recriam a partir de Markdown (imagem, arquivo, embed, subpágina, "
-        "child_database) são PRESERVADOS e o texto novo entra depois deles",
+        help="troca o corpo pelo conteúdo novo (evita ir empilhando blocos ao "
+        "corrigir/reescrever). Seguro por ordem: valida o Markdown contra os limites "
+        "da API, ESCREVE o novo e só então apaga o antigo — se a escrita falhar, nada "
+        "do antigo é apagado. Só é apagado o que o Markdown recria do mesmo tipo "
+        "(parágrafo, títulos, listas, to-do, citação, código, divisória); toggle, "
+        "callout, equação, imagem, arquivo, embed, subpágina, child_database e blocos "
+        "que contêm algo assim são PRESERVADOS (com o motivo) e o texto novo entra "
+        "depois deles. A saída traz os IDs apagados e o comando para desfazer",
     )
     escrever.add_argument(
         "--mesmo-com-database",
@@ -2903,9 +2958,10 @@ def construir_parser() -> argparse.ArgumentParser:
         "--apagar-tudo",
         dest="apagar_tudo",
         action="store_true",
-        help="com --substituir, apaga TAMBÉM os blocos não recriáveis (imagem, "
-        "arquivo, embed, subpágina, child_database). Perigoso: a URL de arquivo "
-        "do Notion expira e apagar um child_database leva o database inteiro",
+        help="com --substituir, apaga TAMBÉM os blocos preservados (toggle, callout, "
+        "equação, imagem, arquivo, embed, subpágina, child_database…). Perigoso: a "
+        "URL de arquivo do Notion expira e apagar um child_database leva o database "
+        "inteiro",
     )
 
     editar_bloco = sub.add_parser(
@@ -2924,8 +2980,10 @@ def construir_parser() -> argparse.ArgumentParser:
 
     limpar = sub.add_parser(
         "limpar",
-        help="apaga TODO o corpo de uma página de uma vez — destrutivo; use para "
-        "reiniciar uma página bagunçada antes de reescrever",
+        help="apaga de uma vez o corpo recriável de uma página — destrutivo; use para "
+        "reiniciar uma página bagunçada antes de reescrever. Preserva (com o motivo) "
+        "o que o Markdown não recria. A saída traz os IDs apagados e, em 'desfazer', "
+        "o comando 'restaurar-bloco' pronto",
     )
     limpar.add_argument("page_id")
     limpar.add_argument("--sim", action="store_true", help="confirma a limpeza")
@@ -2933,8 +2991,19 @@ def construir_parser() -> argparse.ArgumentParser:
         "--apagar-tudo",
         dest="apagar_tudo",
         action="store_true",
-        help="apaga TAMBÉM imagem, arquivo, embed, subpágina e child_database — "
-        "que por padrão são preservados por não se recriarem a partir de Markdown",
+        help="apaga TAMBÉM toggle, callout, equação, imagem, arquivo, embed, "
+        "subpágina e child_database — que por padrão são preservados por não se "
+        "recriarem a partir de Markdown",
+    )
+
+    restaurar_bloco = sub.add_parser(
+        "restaurar-bloco",
+        help="tira da lixeira blocos apagados por 'limpar', 'escrever --substituir' "
+        "ou 'apagar-bloco', pelo ID (a saída deles traz os IDs e o comando pronto em "
+        "'desfazer'). O bloco volta no FIM da página, com o mesmo ID e os filhos",
+    )
+    restaurar_bloco.add_argument(
+        "block_ids", nargs="+", metavar="block_id", help="um ou mais IDs de bloco"
     )
 
     esquema = sub.add_parser(
@@ -3469,6 +3538,8 @@ def _despachar(
         dados = cmd_apagar_bloco(args, client_factory=client_factory)
     elif comando == "limpar":
         dados = cmd_limpar(args, client_factory=client_factory)
+    elif comando == "restaurar-bloco":
+        dados = cmd_restaurar_bloco(args, client_factory=client_factory)
     elif comando == "schema":
         dados = cmd_schema(args, client_factory=client_factory)
     elif comando == "relacionar":

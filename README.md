@@ -242,6 +242,7 @@ notion-tasks escrever <id> "<markdown>" --substituir
 notion-tasks editar-bloco <id> "<texto>"
 notion-tasks apagar-bloco <id> --sim
 notion-tasks limpar <id> --sim
+notion-tasks restaurar-bloco <block_id> [<block_id> ...]
 notion-tasks clonar-database <id>
 
 # Estrutura de projeto (subpáginas, databases, padrão do workspace)
@@ -305,6 +306,21 @@ diretório corrente: a pasta vem de `--dir-backup`, da variável
 `NOTION_AUTOMACOES_BACKUP_DIR` ou da pasta de estado do usuário
 (`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
 `backup_path` sai absoluto.
+
+### Limpar, substituir e desfazer
+
+`escrever --substituir` valida o Markdown contra os limites da API, **escreve o
+conteúdo novo e só então apaga o antigo**: se a escrita falhar, nada do antigo é
+apagado. `limpar` e `--substituir` só apagam o que o Markdown recria do mesmo tipo
+(parágrafo, títulos, listas, to-do, citação, código, divisória); toggle, callout,
+equação, imagem, arquivo, embed, subpágina, `child_database` e blocos que contêm
+algo assim são preservados, cada um com o `motivo` em `blocos_preservados`.
+`blocos_apagados` continua sendo a contagem; os IDs vêm em `blocos_apagados_ids` e
+`desfazer` traz o comando pronto:
+
+```bash
+notion-tasks restaurar-bloco <id1> <id2>   # voltam no FIM da página, com o mesmo ID
+```
 
 ### Envelope JSON e códigos de erro
 

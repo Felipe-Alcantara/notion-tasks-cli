@@ -936,6 +936,120 @@ def test_limpar_com_sim_apaga_o_corpo():
     assert ("excluir_bloco", "b2") in client.chamadas
 
 
+def test_limpar_devolve_os_ids_apagados_e_como_desfazer():
+    """Sem os IDs não há como restaurar: a API restaura pelo ID do bloco."""
+
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": []}},
+        {"id": "b2", "type": "heading_2", "heading_2": {"rich_text": []}},
+    ]
+    codigo, saida = _executar(["--json", "limpar", "page1", "--sim"], client=client)
+
+    assert codigo == 0
+    dados = saida["dados"]
+    # A contagem continua int (contrato antigo); os IDs vêm numa chave nova.
+    assert dados["blocos_apagados"] == 2
+    assert dados["blocos_apagados_ids"] == [
+        {"id": "b1", "tipo": "paragraph"},
+        {"id": "b2", "tipo": "heading_2"},
+    ]
+    assert dados["desfazer"] == "notion-tasks restaurar-bloco b1 b2"
+
+
+def test_limpar_diz_por_que_preservou_cada_bloco():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "t1", "type": "toggle", "toggle": {"rich_text": []}},
+        {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": []}},
+    ]
+    codigo, saida = _executar(["--json", "limpar", "page1", "--sim"], client=client)
+
+    assert codigo == 0
+    preservado = saida["dados"]["blocos_preservados"][0]
+    assert preservado["id"] == "t1"
+    assert preservado["tipo"] == "toggle"
+    assert "duplicado" in preservado["motivo"]
+    assert ("excluir_bloco", "t1") not in client.chamadas
+
+
+def test_escrever_substituir_devolve_os_ids_apagados():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "velho", "type": "paragraph", "paragraph": {"rich_text": []}}
+    ]
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "novo", "--substituir"], client=client
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["blocos_apagados"] == 1
+    assert saida["dados"]["blocos_apagados_ids"] == [{"id": "velho", "tipo": "paragraph"}]
+
+
+def test_limpar_que_para_no_meio_diz_o_que_apagou_e_como_desfazer():
+    """Erro persistente no 2º DELETE: antes, traceback sem dizer o que já foi apagado."""
+
+    from notion_starter import NotionHTTPError
+
+    class ClienteQueFalhaNoSegundo(FakeClient):
+        def ler_blocos(self, *args, **kwargs):
+            return [
+                {"id": f"b{n}", "type": "paragraph", "paragraph": {"rich_text": []}}
+                for n in (1, 2, 3)
+            ]
+
+        def excluir_bloco(self, block_id):
+            if block_id == "b2":
+                raise NotionHTTPError(409, '{"code": "conflict_error", "message": "x"}')
+            return super().excluir_bloco(block_id)
+
+    codigo, saida = _executar(
+        ["--json", "limpar", "page1", "--sim"], client=ClienteQueFalhaNoSegundo()
+    )
+
+    assert codigo == 1
+    erro = saida["erro"]
+    assert erro["codigo"] == "limpeza_incompleta"
+    assert erro["http_status"] == 409
+    assert erro["detalhes"]["blocos_apagados_ids"] == [{"id": "b1", "tipo": "paragraph"}]
+    assert erro["detalhes"]["pendentes"] == [
+        {"id": "b2", "tipo": "paragraph"},
+        {"id": "b3", "tipo": "paragraph"},
+    ]
+    assert erro["proximo_passo"] == "notion-tasks restaurar-bloco b1"
+
+
+def test_restaurar_bloco_tira_da_lixeira_varios_ids():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "restaurar-bloco", "b1", "b2"], client=client
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["restaurados"] == ["b1", "b2"]
+    assert saida["dados"]["falhas"] == []
+    assert "fim" in saida["dados"]["aviso"].lower()
+    assert ("restaurar_bloco", "b1") in client.chamadas
+    assert ("restaurar_bloco", "b2") in client.chamadas
+
+
+def test_restaurar_bloco_que_falha_em_todos_sai_com_erro():
+    from notion_starter import NotionHTTPError
+
+    class ClienteSemLixeira(FakeClient):
+        def restaurar_bloco(self, block_id):
+            raise NotionHTTPError(404, "não encontrado")
+
+    codigo, saida = _executar(
+        ["--json", "restaurar-bloco", "b1"], client=ClienteSemLixeira()
+    )
+
+    assert codigo == 1
+    assert saida["ok"] is False
+    assert "b1" in saida["erro"]["mensagem"]
+
+
 def test_buscar_normaliza_itens():
     client = FakeClient()
     codigo, saida = _executar(["--json", "buscar", "x"], client=client)
