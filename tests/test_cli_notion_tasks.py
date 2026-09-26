@@ -3133,3 +3133,37 @@ def test_relatorio_do_dia_permite_corpo_vazio_quando_pedido(monkeypatch):
     )
     assert codigo == 0
     assert saida["dados"]["blocos_escritos"] == 0
+
+
+def test_abrir_a_cli_nao_carrega_python_docx():
+    """python-docx + lxml eram ~20-29% da abertura de TODO comando.
+
+    O notion-starter passou a importar o docx só dentro de ``renderizar_docx``;
+    este teste guarda a borda: importar a CLI (o que todo comando faz) não pode
+    trazer o docx de volta. Roda num processo novo, porque a suíte já pode ter
+    carregado o módulo.
+    """
+
+    import subprocess
+    import sys
+
+    raiz = Path(cli.__file__).resolve().parents[1]
+    codigo = (
+        "import sys; import cli.notion_tasks; "
+        "carregados = [m for m in ('docx', 'lxml') if m in sys.modules]; "
+        "print(','.join(carregados))"
+    )
+    resultado = subprocess.run(
+        [sys.executable, "-c", codigo],
+        cwd=raiz,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    assert resultado.stdout.strip() == ""
+
+
+def test_exportar_docx_continua_carregando_o_servico_real():
+    assert cli.svc_relatorios_docx.__name__ == "notion_starter.services.relatorios_docx"
+    assert callable(cli.svc_relatorios_docx.exportar_relatorios_docx)
