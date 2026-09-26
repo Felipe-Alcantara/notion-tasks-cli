@@ -483,7 +483,87 @@ def test_ler_busca_tarefa_por_id():
 def test_ler_retorna_erro_quando_nao_encontra():
     codigo, saida = _executar(["--json", "ler", "inexistente"])
     assert codigo == 2
-    assert saida["erro"]["mensagem"] == "Tarefa não encontrada."
+    assert saida["erro"]["mensagem"].startswith("Tarefa não encontrada")
+    # Mesmo código do 404 do Notion, e o caminho para uma linha de outro database.
+    assert saida["erro"]["codigo"] == "nao_encontrado"
+    assert saida["erro"]["proximo_passo"] == "notion-tasks conteudo inexistente"
+
+
+UUID_TAREFA = "3e691f95-497e-816b-b57e-e8ae6be6d500"
+
+
+class FakeTaskListUUID(FakeTaskList):
+    """Tarefa com ID real (UUID com hífens), como a API devolve."""
+
+    def listar(self, status=None, duracao=None, areas=None):
+        tarefa = super().listar(status, duracao, areas)[0]
+        tarefa.id = UUID_TAREFA
+        return [tarefa]
+
+
+def test_ler_aceita_o_id_sem_hifens_do_campo_url():
+    """A forma sem hífens é a que aparece no 'url' da própria resposta."""
+
+    codigo, saida = _executar(
+        ["--json", "ler", UUID_TAREFA.replace("-", "")], fake=FakeTaskListUUID()
+    )
+    assert codigo == 0
+    assert saida["dados"]["id"] == UUID_TAREFA
+
+
+def test_ler_aceita_id_em_maiusculas_e_link_do_notion():
+    for entrada in (
+        UUID_TAREFA.upper(),
+        f"https://app.notion.com/p/Estudar-{UUID_TAREFA.replace('-', '')}",
+        f"https://www.notion.so/meu-espaco/Estudar-{UUID_TAREFA.replace('-', '')}?pvs=4",
+    ):
+        codigo, saida = _executar(["--json", "ler", entrada], fake=FakeTaskListUUID())
+        assert codigo == 0, entrada
+        assert saida["dados"]["id"] == UUID_TAREFA
+
+
+def test_blocos_com_link_chama_a_api_com_o_id_canonico():
+    """Antes o link ia cru para a API: HTTP 400 'Invalid request URL'."""
+
+    client = FakeClient()
+    link = f"https://app.notion.com/p/Pagina-{UUID_TAREFA.replace('-', '')}"
+    codigo, _ = _executar(["--json", "blocos", link], client=client)
+    assert codigo == 0
+    assert ("ler_blocos", UUID_TAREFA) in client.chamadas
+
+
+def test_link_de_database_ignora_o_id_da_view():
+    client = FakeDatabaseClient()
+    view = "0" * 31 + "1"
+    link = f"https://www.notion.so/{UUID_TAREFA.replace('-', '')}?v={view}"
+    codigo, saida = _executar(["--json", "linhas", link], client=client)
+    assert codigo == 0
+    assert saida["dados"]["id"] == UUID_TAREFA
+
+
+def test_editar_bloco_com_link_usa_a_ancora_do_bloco():
+    client = FakeClient()
+    client.obter_bloco = lambda block_id: {
+        "id": block_id,
+        "type": "paragraph",
+        "paragraph": {"rich_text": [{"type": "text", "text": {"content": "a"}}]},
+    }
+    bloco = "1" * 32
+    link = f"https://www.notion.so/Pagina-{UUID_TAREFA.replace('-', '')}#{bloco}"
+    codigo, _ = _executar(["--json", "editar-bloco", link, "novo texto"], client=client)
+    assert codigo == 0
+    alvos = [c[1][0] for c in client.chamadas if c[0] == "atualizar_bloco"]
+    assert alvos == ["11111111-1111-1111-1111-111111111111"]
+
+
+def test_link_sem_id_e_recusado_antes_da_api():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "conteudo", "https://www.notion.so/meu-espaco/sem-id"], client=client
+    )
+    assert codigo == 2
+    assert saida["erro"]["codigo"] == "id_invalido"
+    assert client.chamadas == []
 
 
 def test_opcoes_retorna_json_dos_seletores():

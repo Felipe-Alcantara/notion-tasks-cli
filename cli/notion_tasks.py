@@ -31,6 +31,7 @@ from notion_starter import (  # noqa: E402
 )
 from notion_starter import properties as starter_properties  # noqa: E402
 from notion_starter import schema as starter_schema  # noqa: E402
+from notion_starter.exceptions import IdNotionInvalidoError  # noqa: E402
 from notion_starter.services import anexos as svc_anexos  # noqa: E402
 from notion_starter.services import (  # noqa: E402
     historico_repositorios as svc_historico,
@@ -41,6 +42,7 @@ from notion_starter.services import (  # noqa: E402
     relatorios_diarios as svc_relatorios,
 )
 from notion_starter.services import relatorios_docx as svc_relatorios_docx  # noqa: E402
+from notion_starter.utils import chave_de_id, normalizar_id  # noqa: E402
 
 from cli.erros import (  # noqa: E402
     CODIGOS_ERRO,
@@ -96,6 +98,38 @@ def _texto_obrigatorio(valor: str | None, campo: str) -> str:
     if not normalizado:
         raise CLIError(f"O campo '{campo}' é obrigatório.")
     return normalizado
+
+
+def _id_notion(valor: str | None, campo: str, *, bloco: bool = False) -> str:
+    """ID do Notion vindo de quem opera: UUID com ou sem hífens, ou um link.
+
+    Devolve o UUID canônico (``8-4-4-4-12``, minúsculo) pela regra da
+    biblioteca (:func:`notion_starter.utils.normalizar_id`): a forma sem
+    hífens é a que aparece no ``url`` das respostas, e comparar a forma crua
+    dizia "não encontrado" para um ID certo. Num link, vale o ID do caminho
+    (``?v=`` de view é ignorado; ``?p=`` de painel vence) e, com ``bloco``, a
+    âncora ``#<id>`` do bloco.
+
+    Um link sem ID é recusado aqui (``IdNotionInvalidoError``), antes de a API
+    responder "Invalid request URL". Texto que não é UUID nem link segue como
+    veio, para a própria API responder.
+    """
+
+    texto = _texto_obrigatorio(valor, campo)
+    try:
+        return normalizar_id(texto, preferir_ancora=bloco)
+    except IdNotionInvalidoError:
+        if "://" in texto:
+            raise
+        return texto
+
+
+def _id_opcional(valor: str | None, campo: str, *, bloco: bool = False) -> str | None:
+    """Como :func:`_id_notion`, para flags opcionais (``None`` quando ausente)."""
+
+    if _normalizar_texto(valor) is None:
+        return None
+    return _id_notion(valor, campo, bloco=bloco)
 
 
 def _lista_csv(valores: Sequence[str] | None) -> list[str] | None:
@@ -177,8 +211,8 @@ def _aplicar_relacao_preflight(
     pagina = cliente.obter_pagina(page_id)
     propriedades = pagina.get("properties") or {}
     ids = svc_preflight.ids_relacao(propriedades.get(coluna))
-    esperado = resultado.projeto.id.replace("-", "").casefold()
-    if not any(item.replace("-", "").casefold() == esperado for item in ids):
+    esperado = chave_de_id(resultado.projeto.id)
+    if not any(chave_de_id(item) == esperado for item in ids):
         raise ValueError(
             f"A relation '{coluna}' não confirmou o projeto {resultado.projeto.id} "
             f"na linha {page_id}; releia a linha antes de tentar outra criação."
@@ -484,12 +518,18 @@ def cmd_listar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -
 
 
 def cmd_ler(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> Any:
-    task_id = _texto_obrigatorio(args.task_id, "task_id")
+    task_id = _id_notion(args.task_id, "task_id")
+    procurado = chave_de_id(task_id)
     tarefas = svc.listar_tarefas(tasklist=tasklist_factory())
     for tarefa in tarefas:
-        if tarefa.id == task_id:
+        if chave_de_id(tarefa.id) == procurado:
             return _tarefa_dict(tarefa)
-    raise CLIError("Tarefa não encontrada.")
+    raise CLIError(
+        "Tarefa não encontrada no database padrão (NOTION_DATABASE_ID). Se o ID é de "
+        "uma linha de outro database ou de uma página solta, leia com 'conteudo <id>'.",
+        codigo="nao_encontrado",
+        proximo_passo=f"notion-tasks conteudo {task_id}",
+    )
 
 
 def cmd_criar(
@@ -654,7 +694,7 @@ def cmd_editar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -
             )
 
     tarefa = svc.editar_tarefa(
-        _texto_obrigatorio(args.task_id, "task_id"),
+        _id_notion(args.task_id, "task_id"),
         **campos,
         tasklist=tasklist_factory(),
     )
@@ -681,7 +721,7 @@ def cmd_mover(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) ->
         )
 
     tarefa = svc.mover_status(
-        _texto_obrigatorio(args.task_id, "task_id"),
+        _id_notion(args.task_id, "task_id"),
         status,
         tasklist=tasklist_factory(),
     )
@@ -708,7 +748,7 @@ def cmd_concluir(args: argparse.Namespace, *, tasklist_factory: TaskListFactory)
         )
 
     tarefa = svc.concluir_tarefa(
-        _texto_obrigatorio(args.task_id, "task_id"),
+        _id_notion(args.task_id, "task_id"),
         status,
         tasklist=tasklist_factory(),
     )
@@ -752,7 +792,7 @@ def cmd_escolher_database(args: argparse.Namespace) -> Any:
     depois de um "escolher-database" que respondeu sucesso.
     """
 
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     perfil = perfis_workspace.resolver_perfil(getattr(args, "perfil", None))
     if perfil is not None:
         atualizado = perfis_workspace.definir_database(database_id, perfil.alias)
@@ -799,7 +839,7 @@ def cmd_mapear(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
 
 
 def cmd_conteudo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    page_id = _id_notion(args.page_id, "page_id")
     cliente = client_factory()
     resultado = svc_conteudo.ler_pagina_ou_database(page_id, cliente=cliente)
     if resultado["tipo"] == "database":
@@ -866,7 +906,7 @@ def cmd_exemplo(args: argparse.Namespace, *, client_factory: ClientFactory) -> A
 
 
 def cmd_linhas(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     linhas = svc_conteudo.listar_linhas(
         database_id,
         propriedades=getattr(args, "completo", False),
@@ -1017,7 +1057,7 @@ def _normalizar_entrada_lote(
     if criar:
         nome = _texto_obrigatorio(nome, f"nome da linha {indice}")
     else:
-        page_id = _texto_obrigatorio(page_id, f"page_id da linha {indice}")
+        page_id = _id_notion(page_id, f"page_id da linha {indice}")
 
     return {
         "page_id": page_id,
@@ -1593,7 +1633,7 @@ def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory)
             dry_run=dry_run,
         )
 
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    page_id = _id_notion(args.page_id, "page_id")
     valores = _pares_chave_valor(args.set, "--set")
     acrescentos = _pares_chave_valor(args.append, "--append")
     cliente = client_factory()
@@ -1633,13 +1673,13 @@ def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory)
 
 
 def cmd_blocos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    page_id = _id_notion(args.page_id, "page_id")
     blocos = svc_conteudo.listar_blocos(page_id, cliente=client_factory())
     return {"id": page_id, "blocos": blocos}
 
 
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    page_id = _id_notion(args.page_id, "page_id")
     conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
     apagar_tudo = getattr(args, "apagar_tudo", False)
     if apagar_tudo and not args.substituir:
@@ -1695,7 +1735,7 @@ def _dados_limpeza(limpeza: svc_conteudo.ResultadoLimpeza) -> dict[str, Any]:
 
 
 def cmd_limpar(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
+    page_id = _id_notion(args.page_id, "page_id")
     # Operação destrutiva: exige confirmação explícita, nunca apaga "no susto".
     if not args.sim:
         raise CLIError(
@@ -1725,7 +1765,7 @@ def cmd_restaurar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
     se nenhum voltar, é erro.
     """
 
-    ids = [_texto_obrigatorio(valor, "block_id") for valor in args.block_ids]
+    ids = [_id_notion(valor, "block_id", bloco=True) for valor in args.block_ids]
     resultado = svc_conteudo.restaurar_blocos(ids, cliente=client_factory())
     falhas = [{"id": bloco_id, "motivo": motivo} for bloco_id, motivo in resultado.falhas]
     if falhas and not resultado.restaurados:
@@ -1748,14 +1788,14 @@ def cmd_restaurar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    block_id = _texto_obrigatorio(args.block_id, "block_id")
+    block_id = _id_notion(args.block_id, "block_id", bloco=True)
     conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
     svc_conteudo.editar_bloco(block_id, conteudo, cliente=client_factory())
     return {"id": block_id, "editado": True}
 
 
 def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    block_id = _texto_obrigatorio(args.block_id, "block_id")
+    block_id = _id_notion(args.block_id, "block_id", bloco=True)
     # Operação destrutiva: exige confirmação explícita, nunca apaga "no susto".
     if not args.sim:
         raise CLIError(
@@ -1765,18 +1805,12 @@ def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
     return {"id": block_id, "apagado": True}
 
 
-def _sem_hifens(identificador: str) -> str:
-    """Compara IDs do Notion ignorando hífens — a API aceita as duas formas."""
-
-    return str(identificador).replace("-", "").lower()
-
-
 def _texto_par_relacao(valor: Any, origem: str) -> str:
     """Valida um ID vindo de ``--par`` ou de um arquivo JSON."""
 
     if not isinstance(valor, str):
         raise CLIError(f"{origem} deve conter IDs como texto.")
-    return _texto_obrigatorio(valor, origem)
+    return _id_notion(valor, origem)
 
 
 def _par_relacao(valor: Any, origem: str) -> tuple[str, str]:
@@ -1866,8 +1900,8 @@ def _obter_pares_relacao(args: argparse.Namespace) -> tuple[list[tuple[str, str]
             raise CLIError("Não misture page_a/page_b com --par ou --arquivo.")
         return [
             (
-                _texto_obrigatorio(page_a, "page_a"),
-                _texto_obrigatorio(page_b, "page_b"),
+                _id_notion(page_a, "page_a"),
+                _id_notion(page_b, "page_b"),
             )
         ], False
     if pares and arquivo:
@@ -1896,7 +1930,7 @@ def cmd_schema(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
     passo que se pula com pressa — e o erro aparece depois, já gravado.
     """
 
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     descricao = starter_schema.descrever_database(
         client_factory().get_database(database_id)
     )
@@ -1926,7 +1960,7 @@ def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -
 
     if not lote:
         origem, destino = pares[0]
-        if _sem_hifens(origem) == _sem_hifens(destino):
+        if chave_de_id(origem) == chave_de_id(destino):
             raise CLIError("page_a e page_b são a mesma página — nada a relacionar.")
         return svc_relacoes.relacionar(
             origem,
@@ -1943,7 +1977,7 @@ def cmd_relacionar(args: argparse.Namespace, *, client_factory: ClientFactory) -
             "page_a": origem,
             "page_b": destino,
         }
-        if _sem_hifens(origem) == _sem_hifens(destino):
+        if chave_de_id(origem) == chave_de_id(destino):
             item.update(
                 ok=False,
                 erro={
@@ -1992,7 +2026,7 @@ def cmd_relatorios_do_git(args: argparse.Namespace, *, client_factory: ClientFac
     descrever, em prosa, o mesmo dia com mais contexto do que qualquer log.
     """
 
-    database_id = _texto_obrigatorio(args.database, "--database")
+    database_id = _id_notion(args.database, "--database")
     repositorios = [
         svc_historico.Repositorio.de_par(nome, caminho)
         for nome, caminho in _pares_chave_valor(args.repo, "--repo").items()
@@ -2112,7 +2146,7 @@ def cmd_relatorio_do_dia(args: argparse.Namespace, *, client_factory: ClientFact
     estão, porque costumam descrever o trabalho de outro projeto no mesmo dia.
     """
 
-    database_id = _texto_obrigatorio(args.database, "--database")
+    database_id = _id_notion(args.database, "--database")
     data = _normalizar_texto(args.data) or date.today().isoformat()
     corpo = _normalizar_texto(args.corpo) or ""
 
@@ -2165,11 +2199,11 @@ def cmd_buscar(args: argparse.Namespace, *, client_factory: ClientFactory) -> An
 
 
 def cmd_clonar_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     return svc_clonagem.clonar_database(
         database_id,
         titulo=_normalizar_texto(args.titulo) or None,
-        pagina_destino=_normalizar_texto(args.pagina) or None,
+        pagina_destino=_id_opcional(args.pagina, "--pagina"),
         com_linhas=args.com_linhas,
         relacoes=args.relacoes,
         cliente=client_factory(),
@@ -2177,7 +2211,7 @@ def cmd_clonar_database(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_criar_subpagina(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    pagina_pai_id = _texto_obrigatorio(args.pagina_pai_id, "pagina_pai_id")
+    pagina_pai_id = _id_notion(args.pagina_pai_id, "pagina_pai_id")
     titulo = _texto_obrigatorio(args.titulo, "titulo")
     criada = svc_estrutura.criar_subpagina(
         pagina_pai_id,
@@ -2189,7 +2223,7 @@ def cmd_criar_subpagina(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_inspecionar_estrutura(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    pagina_id = _id_notion(args.pagina_id, "pagina_id")
     arvore = svc_estrutura.inspecionar_estrutura(
         pagina_id,
         profundidade=args.profundidade,
@@ -2199,8 +2233,8 @@ def cmd_inspecionar_estrutura(args: argparse.Namespace, *, client_factory: Clien
 
 
 def cmd_clonar_estrutura(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    referencia_id = _texto_obrigatorio(args.pagina_referencia_id, "pagina_referencia_id")
-    destino_id = _texto_obrigatorio(args.pagina_destino_id, "pagina_destino_id")
+    referencia_id = _id_notion(args.pagina_referencia_id, "pagina_referencia_id")
+    destino_id = _id_notion(args.pagina_destino_id, "pagina_destino_id")
     resumo = svc_estrutura.clonar_estrutura_projeto(
         referencia_id,
         destino_id,
@@ -2216,7 +2250,7 @@ def cmd_clonar_estrutura(args: argparse.Namespace, *, client_factory: ClientFact
 def cmd_montar_estrutura_projeto(
     args: argparse.Namespace, *, client_factory: ClientFactory
 ) -> Any:
-    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    pagina_id = _id_notion(args.pagina_id, "pagina_id")
     resumo = svc_estrutura.montar_estrutura_projeto(pagina_id, cliente=client_factory())
     return {
         "subpaginas_criadas": resumo.subpaginas_criadas,
@@ -2225,10 +2259,10 @@ def cmd_montar_estrutura_projeto(
 
 
 def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
-    bloco_id = _texto_obrigatorio(args.bloco_id, "bloco_id")
+    pagina_id = _id_notion(args.pagina_id, "pagina_id")
+    bloco_id = _id_notion(args.bloco_id, "bloco_id", bloco=True)
 
-    apos = _normalizar_texto(args.apos)
+    apos = _id_opcional(args.apos, "--apos", bloco=True)
     if bool(apos) == bool(args.inicio):
         raise CLIError("Informe exatamente um entre --apos <bloco_id> e --inicio.")
 
@@ -2253,10 +2287,11 @@ def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_garantir_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     nome_coluna = _texto_obrigatorio(args.nome_coluna, "nome_coluna")
     definicao = starter_properties.schema_propriedade(
-        args.tipo, relacionar_com=getattr(args, "relacionar_com", None)
+        args.tipo,
+        relacionar_com=_id_opcional(getattr(args, "relacionar_com", None), "--relacionar-com"),
     )
 
     criada = svc_schema.garantir_coluna(
@@ -2266,7 +2301,7 @@ def cmd_garantir_coluna(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_renomear_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     nome_atual = _texto_obrigatorio(args.nome_atual, "nome_atual")
     novo_nome = _texto_obrigatorio(args.novo_nome, "novo_nome")
 
@@ -2294,7 +2329,7 @@ def cmd_atualizar_github(args: argparse.Namespace, *, client_factory: ClientFact
         raise CLIError(
             "Informe as contas com --contas (CSV) ou defina GITHUB_CONTAS no ambiente."
         )
-    database_id = _normalizar_texto(args.database) or os.environ.get(
+    database_id = _id_opcional(args.database, "--database") or os.environ.get(
         "NOTION_DATABASE_ID", ""
     ).strip()
     if not database_id:
@@ -2313,7 +2348,7 @@ def cmd_atualizar_github(args: argparse.Namespace, *, client_factory: ClientFact
 
 
 def cmd_exportar_docx(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _normalizar_texto(args.database) or os.environ.get(
+    database_id = _id_opcional(args.database, "--database") or os.environ.get(
         "NOTION_REPORTS_DATABASE_ID", ""
     ).strip()
     if not database_id:
@@ -2333,7 +2368,7 @@ def cmd_exportar_docx(args: argparse.Namespace, *, client_factory: ClientFactory
 
 
 def cmd_criar_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    pagina_id = _texto_obrigatorio(args.pagina_id, "pagina_id")
+    pagina_id = _id_notion(args.pagina_id, "pagina_id")
     titulo = _texto_obrigatorio(args.titulo, "titulo")
     tipos = _pares_chave_valor(args.prop, "--prop")
 
@@ -2361,7 +2396,7 @@ def cmd_criar_database(args: argparse.Namespace, *, client_factory: ClientFactor
 
 
 def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     caminho = _texto_obrigatorio(args.caminho, "caminho")
     fonte = svc_ingestao.FontePlanilha(
         caminho,
@@ -2386,7 +2421,7 @@ def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFac
 
 def cmd_anexar_arquivo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     return svc_anexos.anexar_arquivo(
-        _texto_obrigatorio(args.page_id, "page_id"),
+        _id_notion(args.page_id, "page_id"),
         _texto_obrigatorio(args.caminho, "caminho"),
         propriedade=_normalizar_texto(args.propriedade) or "Arquivos e mídia",
         substituir=args.substituir,
@@ -2395,8 +2430,8 @@ def cmd_anexar_arquivo(args: argparse.Namespace, *, client_factory: ClientFactor
 
 
 def cmd_mover_pagina(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    page_id = _texto_obrigatorio(args.page_id, "page_id")
-    destino = _texto_obrigatorio(args.novo_pai_id, "novo_pai_id")
+    page_id = _id_notion(args.page_id, "page_id")
+    destino = _id_notion(args.novo_pai_id, "novo_pai_id")
     client_factory().mover_pagina(page_id, destino, tipo_pai=args.tipo_pai)
     return {
         "id": page_id,
@@ -2410,14 +2445,14 @@ def cmd_mover_pagina(args: argparse.Namespace, *, client_factory: ClientFactory)
 
 
 def cmd_mover_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
-    destino = _texto_obrigatorio(args.novo_pai_id, "novo_pai_id")
+    database_id = _id_notion(args.database_id, "database_id")
+    destino = _id_notion(args.novo_pai_id, "novo_pai_id")
     client_factory().mover_database(database_id, destino)
     return {"id": database_id, "novo_pai": destino}
 
 
 def cmd_renomear_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    database_id = _texto_obrigatorio(args.database_id, "database_id")
+    database_id = _id_notion(args.database_id, "database_id")
     novo_titulo = _texto_obrigatorio(args.novo_titulo, "novo_titulo")
     client_factory().renomear_database(database_id, novo_titulo)
     return {"id": database_id, "titulo": novo_titulo}
@@ -2431,7 +2466,7 @@ def cmd_perfis(args: argparse.Namespace) -> Any:
         perfil = perfis_workspace.adicionar_perfil(
             alias=args.alias,
             token=args.token,
-            database_id=_normalizar_texto(args.database),
+            database_id=_id_opcional(args.database, "--database"),
             nome=_normalizar_texto(args.nome),
             descricao=_normalizar_texto(args.descricao),
             ativar=args.ativar,

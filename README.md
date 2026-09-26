@@ -322,6 +322,17 @@ algo assim são preservados, cada um com o `motivo` em `blocos_preservados`.
 notion-tasks restaurar-bloco <id1> <id2>   # voltam no FIM da página, com o mesmo ID
 ```
 
+### IDs e links
+
+Todo argumento que recebe um ID (posicional ou flag, como `--apos`, `--database`,
+`--pagina`, `--relacionar-com`) aceita o UUID com ou sem hífens — a forma sem
+hífens é a que aparece no `url` das respostas — e links de `notion.so`,
+`app.notion.com` ou `*.notion.site`. Num link vale o ID do caminho; `?v=` (view
+de database) é ignorado e `?p=` (página aberta em painel) vence. Em argumentos
+de bloco (`editar-bloco`, `apagar-bloco`, `restaurar-bloco`, `reordenar-bloco`,
+`--apos`), a âncora `#<id>` do link aponta o bloco. Um link sem ID é recusado
+antes da API (`id_invalido`).
+
 ### Envelope JSON e códigos de erro
 
 Com `--json`, a saída é sempre `{"ok": true, "dados": ...}` ou:
