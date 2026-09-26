@@ -1899,19 +1899,174 @@ def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
     sublinhado, cor…) só é descartado com ``--aceitar-perda-de-formatacao``.
     """
 
-    block_id = _id_notion(args.block_id, "block_id", bloco=True)
     trocar = getattr(args, "trocar", None)
     por = getattr(args, "por", None)
     todas = getattr(args, "todas", False) is True
     aceitar_perda = getattr(args, "aceitar_perda_de_formatacao", False) is True
     conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    arquivo = _argumento_arquivo_lote(args)
+    if arquivo:
+        conflitos = {
+            "block_id": getattr(args, "block_id", None),
+            "conteudo": conteudo,
+            "--trocar": trocar,
+            "--por": por,
+        }
+        presentes = [nome for nome, valor in conflitos.items() if valor is not None]
+        presentes += ["--todas"] if todas else []
+        presentes += ["--aceitar-perda-de-formatacao"] if aceitar_perda else []
+        if presentes:
+            raise CLIError(
+                "Não misture --arquivo com os argumentos de uma edição individual: "
+                + ", ".join(presentes)
+            )
+        return _cmd_editar_bloco_lote(
+            arquivo,
+            client_factory=client_factory,
+            progresso_a_cada=getattr(args, "progresso_a_cada", 10),
+        )
+
+    block_id = _id_notion(args.block_id, "block_id", bloco=True)
     _validar_modo_edicao(conteudo, trocar, por, todas=todas, aceitar_perda=aceitar_perda)
-    cliente = client_factory()
+    return _executar_edicao(
+        block_id,
+        conteudo=conteudo,
+        trocar=trocar,
+        por=por,
+        todas=todas,
+        aceitar_perda=aceitar_perda,
+        cliente=client_factory(),
+    )
+
+
+def _executar_edicao(
+    block_id: str,
+    *,
+    conteudo: str | None,
+    trocar: str | None,
+    por: str | None,
+    todas: bool,
+    aceitar_perda: bool,
+    cliente: NotionClient,
+) -> dict[str, Any]:
+    """Uma edição já validada: troca de trecho ou reescrita por Markdown."""
+
     if trocar is not None:
         return _trocar_trecho(block_id, trocar, por or "", todas=todas, cliente=cliente)
     return _editar_por_markdown(
         block_id, conteudo or "", aceitar_perda=aceitar_perda, cliente=cliente
     )
+
+
+#: Valores aceitos como verdadeiro/falso nas colunas booleanas de um lote.
+_VERDADEIROS = frozenset({"true", "sim", "s", "1", "yes", "y"})
+_FALSOS = frozenset({"", "false", "nao", "não", "n", "0", "no"})
+
+
+def _booleano_lote(valor: Any, *, campo: str, indice: int) -> bool:
+    if isinstance(valor, bool):
+        return valor
+    if valor is None:
+        return False
+    texto = str(valor).strip().casefold()
+    if texto in _VERDADEIROS:
+        return True
+    if texto in _FALSOS:
+        return False
+    raise CLIError(f"Item {indice}: '{campo}' deve ser verdadeiro ou falso (recebido: {valor!r}).")
+
+
+def _texto_lote(valor: Any, *, campo: str, indice: int) -> str | None:
+    """Texto opcional de um item de lote; célula vazia do CSV conta como ausente."""
+
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        raise CLIError(f"Item {indice}: '{campo}' deve ser texto.")
+    return valor if valor.strip() else None
+
+
+def _ler_arquivo_edicoes(caminho_texto: str) -> tuple[Path, list[Any]]:
+    """JSON como nos demais lotes; CSV com as colunas block_id, conteudo, trocar, por…"""
+
+    caminho = Path(caminho_texto).expanduser()
+    if caminho.suffix.casefold() != ".csv":
+        return _ler_arquivo_lote(caminho_texto)
+    if not caminho.is_file():
+        raise CLIError(f"Arquivo de lote não encontrado: {caminho}")
+    try:
+        with caminho.open("r", encoding="utf-8-sig", newline="") as arquivo:
+            linhas = [
+                {str(chave).strip(): valor for chave, valor in linha.items() if chave is not None}
+                for linha in csv.DictReader(arquivo)
+            ]
+    except (OSError, UnicodeError, csv.Error) as erro:
+        raise CLIError(f"Não foi possível ler o CSV de lote '{caminho}': {erro}") from erro
+    if not linhas:
+        raise CLIError(f"O CSV de lote '{caminho}' não contém nenhuma linha.")
+    return caminho, linhas
+
+
+def _cmd_editar_bloco_lote(
+    caminho_texto: str, *, client_factory: ClientFactory, progresso_a_cada: Any
+) -> dict[str, Any]:
+    """Várias edições de bloco num processo: um cliente, um resultado por item.
+
+    Cada item é ``{"block_id", "conteudo"}`` ou ``{"block_id", "trocar", "por",
+    "todas"}`` (``aceitar_perda_de_formatacao`` opcional). Um item com erro não
+    interrompe os demais.
+    """
+
+    intervalo = _progresso_lote(progresso_a_cada)
+    caminho, entradas = _ler_arquivo_edicoes(caminho_texto)
+    cliente = client_factory()
+    resultados: list[dict[str, Any]] = []
+    for indice, item in enumerate(entradas, start=1):
+        referencia: str | None = None
+        try:
+            if not isinstance(item, Mapping):
+                raise CLIError(
+                    f"Item {indice}: use um objeto com block_id e conteudo (ou trocar/por)."
+                )
+            campos = {str(chave).strip().casefold(): valor for chave, valor in item.items()}
+            bruto = _texto_lote(
+                campos.get("block_id", campos.get("id")), campo="block_id", indice=indice
+            )
+            referencia = bruto
+            block_id = _id_notion(bruto, f"block_id do item {indice}", bloco=True)
+            referencia = block_id
+            trocar = _texto_lote(campos.get("trocar"), campo="trocar", indice=indice)
+            por_bruto = campos.get("por")
+            if trocar is None:
+                por = _texto_lote(por_bruto, campo="por", indice=indice)
+            else:
+                # Com --trocar, "por" vazio é válido: apaga o trecho.
+                por = None if por_bruto is None else str(por_bruto)
+            conteudo = _texto_lote(campos.get("conteudo"), campo="conteudo", indice=indice)
+            todas = _booleano_lote(campos.get("todas"), campo="todas", indice=indice)
+            aceitar = _booleano_lote(
+                campos.get("aceitar_perda_de_formatacao"),
+                campo="aceitar_perda_de_formatacao",
+                indice=indice,
+            )
+            _validar_modo_edicao(conteudo, trocar, por, todas=todas, aceitar_perda=aceitar)
+            dados = _executar_edicao(
+                block_id,
+                conteudo=conteudo,
+                trocar=trocar,
+                por=por,
+                todas=todas,
+                aceitar_perda=aceitar,
+                cliente=cliente,
+            )
+        except Exception as erro:  # noqa: BLE001 - o lote relata cada item sem parar
+            resultados.append(_resultado_lote(indice, "erro", block_id=referencia, erro=erro))
+        else:
+            resultados.append(
+                _resultado_lote(indice, "sucesso", block_id=block_id, dados=dados)
+            )
+        _emitir_progresso_lote(indice, len(entradas), resultados, intervalo)
+    return _resumo_lote("editar-bloco", caminho, resultados)
 
 
 def _validar_modo_edicao(
@@ -2858,6 +3013,7 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         'python -m cli --json editar-bloco <block_id> "Texto novo do parágrafo"',
         'python -m cli --json editar-bloco <block_id> --trocar "20:12" --por "20:15"',
         'python -m cli --json editar-bloco <block_id> --trocar "v1" --por "v2" --todas',
+        "python -m cli --json editar-bloco --arquivo edicoes.json --progresso-a-cada 25",
     ],
     "apagar-bloco": [
         "python -m cli --json apagar-bloco <block_id> --sim",
@@ -3373,7 +3529,7 @@ def construir_parser() -> argparse.ArgumentParser:
         "outro tipo, várias linhas e perda de menção/sublinhado/cor são recusados sem "
         "gravar nada. A saída confirma tipo, markdown e editado_em",
     )
-    editar_bloco.add_argument("block_id")
+    editar_bloco.add_argument("block_id", nargs="?")
     editar_bloco.add_argument(
         "conteudo",
         nargs="?",
@@ -3399,6 +3555,20 @@ def construir_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reescreve por Markdown mesmo que menção, equação, sublinhado ou cor se "
         "percam (prefira --trocar)",
+    )
+    editar_bloco.add_argument(
+        "--arquivo",
+        metavar="ARQUIVO",
+        help="várias edições num processo, a partir de JSON (lista, ou objeto com "
+        "'itens'/'linhas') ou CSV: cada item é {block_id, conteudo} ou {block_id, "
+        "trocar, por, todas}. Envelope de lote; um erro não para os demais",
+    )
+    editar_bloco.add_argument(
+        "--progresso-a-cada",
+        type=int,
+        default=10,
+        metavar="N",
+        help="no modo --arquivo, informa progresso a cada N itens no stderr (padrão: 10)",
     )
 
     apagar_bloco = sub.add_parser(

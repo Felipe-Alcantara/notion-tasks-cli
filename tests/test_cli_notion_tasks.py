@@ -1240,6 +1240,75 @@ def test_editar_bloco_trocar_ambiguo_sugere_todas():
     assert saida["dados"]["ocorrencias"] == 2
 
 
+def test_editar_bloco_lote_json_reusa_o_cliente_e_continua_depois_de_erro(tmp_path, capsys):
+    arquivo = tmp_path / "edicoes.json"
+    arquivo.write_text(
+        json.dumps(
+            {
+                "itens": [
+                    {"block_id": "b1", "conteudo": "título novo"},
+                    {"block_id": "b2", "conteudo": "linha 1\n\nlinha 2"},
+                    {"block_id": "b3", "trocar": "velho", "por": "novo"},
+                    {"conteudo": "sem id"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = FakeEdicaoClient(_heading(_texto("texto velho")))
+    fabricas = 0
+
+    def fabrica():
+        nonlocal fabricas
+        fabricas += 1
+        return client
+
+    codigo, saida = cli.executar(
+        ["--json", "editar-bloco", "--arquivo", str(arquivo), "--progresso-a-cada", "2"],
+        client_factory=fabrica,
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["modo"] == "lote"
+    assert dados["comando"] == "editar-bloco"
+    assert (dados["total"], dados["sucessos"], dados["erros"]) == (4, 2, 2)
+    assert [r["estado"] for r in dados["resultados"]] == ["sucesso", "erro", "sucesso", "erro"]
+    assert dados["resultados"][1]["erro"]["codigo"] == "edicao_multibloco"
+    assert dados["resultados"][2]["dados"]["ocorrencias"] == 1
+    assert fabricas == 1
+    assert [c[1][0] for c in client.chamadas if c[0] == "atualizar_bloco"] == ["b1", "b3"]
+    assert "[lote] 2/4" in capsys.readouterr().err
+
+
+def test_editar_bloco_lote_csv(tmp_path):
+    arquivo = tmp_path / "edicoes.csv"
+    arquivo.write_text(
+        "block_id,conteudo,trocar,por,todas\n"
+        "b1,texto novo,,,\n"
+        "b2,,x,y,sim\n",
+        encoding="utf-8",
+    )
+    client = FakeEdicaoClient(_heading(_texto("x e x")))
+    codigo, saida = _executar(["--json", "editar-bloco", "--arquivo", str(arquivo)], client=client)
+
+    assert codigo == 0
+    assert saida["dados"]["sucessos"] == 2
+    assert saida["dados"]["resultados"][1]["dados"]["ocorrencias"] == 2
+
+
+def test_editar_bloco_lote_nao_mistura_com_edicao_individual(tmp_path):
+    arquivo = tmp_path / "edicoes.json"
+    arquivo.write_text('[{"block_id": "b1", "conteudo": "x"}]', encoding="utf-8")
+    client = FakeEdicaoClient(_heading(_texto("a")))
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "--arquivo", str(arquivo)], client=client
+    )
+    assert codigo == 2
+    assert "--arquivo" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
+
+
 def test_editar_bloco_combinacoes_invalidas_sao_recusadas_antes_da_api():
     for argumentos in (
         ["editar-bloco", "b1", "texto", "--trocar", "a", "--por", "b"],

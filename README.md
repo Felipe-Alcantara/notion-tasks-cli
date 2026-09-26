@@ -351,6 +351,12 @@ reescrita é recusada com a lista do que se perderia; `--trocar "<antigo>" --por
 e `--aceitar-perda-de-formatacao` reescreve mesmo assim. A saída confirma `tipo`,
 `markdown` e `editado_em` a partir da resposta da API.
 
+Para muitas edições, `editar-bloco --arquivo edicoes.json` processa o lote num
+processo só (um cliente, progresso no stderr, um resultado por item, sem parar no
+primeiro erro). Cada item é `{"block_id": "...", "conteudo": "..."}` ou
+`{"block_id": "...", "trocar": "...", "por": "...", "todas": false}`; em CSV, as
+colunas `block_id`, `conteudo`, `trocar`, `por` e `todas`.
+
 ### Apagar blocos
 
 `apagar-bloco <id> [<id> ...] --sim` lê cada bloco antes de apagá-lo. Subpágina
