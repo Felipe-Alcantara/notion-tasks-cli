@@ -140,6 +140,55 @@ def _id_opcional(valor: str | None, campo: str, *, bloco: bool = False) -> str |
     return _id_notion(valor, campo, bloco=bloco)
 
 
+def _markdown_da_entrada(
+    valor: str | None, arquivo_md: str | None, *, campo: str
+) -> str | None:
+    """Markdown do argumento, do stdin (``-``) ou de ``--arquivo-md``.
+
+    Passar Markdown no argv esbarra no limite de 128 KiB por argumento do
+    Linux (e de ~32 mil caracteres no Windows) e na citação do shell; o stdin
+    e o arquivo não. É leitura de E/S de borda: o serviço continua recebendo
+    ``str``. Lê em UTF-8 (com BOM tolerado) independentemente do console.
+
+    Raises:
+        CLIError: As duas fontes juntas, ``-`` sem nada redirecionado (em vez
+            de ficar esperando o teclado) ou arquivo ilegível.
+    """
+
+    texto = _normalizar_texto(valor)
+    caminho = _normalizar_texto(arquivo_md)
+    if caminho is not None:
+        if texto is not None:
+            raise CLIError(f"Use {campo} OU --arquivo-md, não os dois.")
+        arquivo = Path(caminho).expanduser()
+        try:
+            return arquivo.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as erro:
+            raise CLIError(f"Não foi possível ler o Markdown de '{arquivo}': {erro}") from erro
+    if texto != "-":
+        return valor
+    entrada = sys.stdin
+    if entrada is None or entrada.isatty():
+        raise CLIError(
+            f"{campo} '-' lê o Markdown do stdin, mas nada foi redirecionado: use "
+            "'< nota.md', um pipe ou --arquivo-md <arquivo>."
+        )
+    bruto = entrada.buffer.read() if hasattr(entrada, "buffer") else entrada.read()
+    if isinstance(bruto, bytes):
+        try:
+            return bruto.decode("utf-8-sig")
+        except UnicodeError as erro:
+            raise CLIError(f"O stdin não está em UTF-8: {erro}") from erro
+    return bruto
+
+
+def _argumento_arquivo_md(args: argparse.Namespace) -> str | None:
+    """Lê ``--arquivo-md`` sem transformar atributos automáticos de ``Mock`` em caminho."""
+
+    valor = getattr(args, "arquivo_md", None)
+    return valor if isinstance(valor, str) else None
+
+
 def _lista_csv(valores: Sequence[str] | None) -> list[str] | None:
     if not valores:
         return None
@@ -581,6 +630,7 @@ def cmd_criar(
             "--area": getattr(args, "area", None),
             "--set": getattr(args, "set", None),
             "--conteudo": getattr(args, "conteudo", None),
+            "--arquivo-md": _argumento_arquivo_md(args),
         }
         presentes = [nome for nome, valor in conflitos.items() if _argumento_presente(valor)]
         if presentes:
@@ -611,7 +661,11 @@ def cmd_criar(
             )
 
     extras = _pares_chave_valor(getattr(args, "set", None), "--set")
-    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    conteudo = _normalizar_texto(
+        _markdown_da_entrada(
+            getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="--conteudo"
+        )
+    )
     cliente: NotionClient | None = None
     preflight: svc_preflight.ResultadoPreflight | None = None
     if _preflight_necessario(extras, estrito=estrito, dry_run=dry_run):
@@ -1757,7 +1811,10 @@ def cmd_ler_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) ->
 
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _id_notion(args.page_id, "page_id")
-    conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
+    conteudo = _texto_obrigatorio(
+        _markdown_da_entrada(args.conteudo, _argumento_arquivo_md(args), campo="conteudo"),
+        "conteudo (texto, '-' para o stdin ou --arquivo-md)",
+    )
     apagar_tudo = getattr(args, "apagar_tudo", False)
     if apagar_tudo and not args.substituir:
         raise CLIError("--apagar-tudo só faz sentido junto de --substituir.")
@@ -1903,7 +1960,11 @@ def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
     por = getattr(args, "por", None)
     todas = getattr(args, "todas", False) is True
     aceitar_perda = getattr(args, "aceitar_perda_de_formatacao", False) is True
-    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    conteudo = _normalizar_texto(
+        _markdown_da_entrada(
+            getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="conteudo"
+        )
+    )
     arquivo = _argumento_arquivo_lote(args)
     if arquivo:
         conflitos = {
@@ -2599,7 +2660,12 @@ def cmd_relatorio_do_dia(args: argparse.Namespace, *, client_factory: ClientFact
 
     database_id = _id_notion(args.database, "--database")
     data = _normalizar_texto(args.data) or date.today().isoformat()
-    corpo = _normalizar_texto(args.corpo) or ""
+    corpo = (
+        _normalizar_texto(
+            _markdown_da_entrada(args.corpo, _argumento_arquivo_md(args), campo="--corpo")
+        )
+        or ""
+    )
 
     if not corpo and not args.permitir_corpo_vazio:
         raise CLIError(
@@ -2667,7 +2733,9 @@ def cmd_criar_subpagina(args: argparse.Namespace, *, client_factory: ClientFacto
     criada = svc_estrutura.criar_subpagina(
         pagina_pai_id,
         titulo,
-        markdown=_normalizar_texto(args.conteudo) or None,
+        markdown=_normalizar_texto(
+            _markdown_da_entrada(args.conteudo, _argumento_arquivo_md(args), campo="--conteudo")
+        ),
         cliente=client_factory(),
     )
     return {"id": criada.get("id"), "url": criada.get("url"), "titulo": titulo}
@@ -3004,6 +3072,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'",
         "python -m cli --json escrever <page_id> $'- item inserido' --apos <block_id>",
         "python -m cli --json escrever <page_id> $'> Aviso no topo' --inicio",
+        "python -m cli --json escrever <page_id> - < nota.md  # Markdown pelo stdin",
+        "python -m cli --json escrever <page_id> --arquivo-md nota.md --substituir",
         "python -m cli --json escrever <page_id> $'# Só isto' --substituir",
         "python -m cli --json escrever <page_id> $'# Zera mesmo' --substituir --apagar-tudo",
         "# página que contém database: trabalhe nas LINHAS, não escreva solto nela",
@@ -3039,10 +3109,10 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "relatorio-do-dia": [
         'python -m cli --json relatorio-do-dia --database <id> '
         '--resumo "Corrigi o bug X e entreguei a feature Y" '
-        '--corpo "$(cat relato-do-dia.md)"',
+        "--arquivo-md relato-do-dia.md",
         'python -m cli --json relatorio-do-dia --database <id> --data 2026-09-08 '
         '--resumo "..." --o-que-fiz "..." --bloqueios "..." --proximos-passos "..." '
-        '--status Concluído --corpo "$(cat relato.md)"',
+        "--status Concluído --corpo - < relato.md",
     ],
     "schema": [
         "python -m cli --json schema <database_id>",
@@ -3281,7 +3351,13 @@ def construir_parser() -> argparse.ArgumentParser:
     criar.add_argument(
         "--conteudo",
         help="Markdown do corpo da linha, escrito logo após as propriedades — "
-        "fecha criar + editar-linha + escrever numa chamada só",
+        "fecha criar + editar-linha + escrever numa chamada só; '-' lê do stdin",
+    )
+    criar.add_argument(
+        "--arquivo-md",
+        dest="arquivo_md",
+        metavar="ARQUIVO",
+        help="lê o Markdown do corpo deste arquivo (não confundir com --arquivo, o lote)",
     )
     criar.add_argument(
         "--arquivo",
@@ -3477,7 +3553,18 @@ def construir_parser() -> argparse.ArgumentParser:
         "'editar-linha'",
     )
     escrever.add_argument("page_id")
-    escrever.add_argument("conteudo", help="texto em Markdown a anexar")
+    escrever.add_argument(
+        "conteudo",
+        nargs="?",
+        help="texto em Markdown a anexar; '-' lê do stdin (escrever <id> - < nota.md)",
+    )
+    escrever.add_argument(
+        "--arquivo-md",
+        dest="arquivo_md",
+        metavar="ARQUIVO",
+        help="lê o Markdown deste arquivo (UTF-8) — sem limite de tamanho do argv nem "
+        "escaping de shell",
+    )
     posicao_escrita = escrever.add_mutually_exclusive_group()
     posicao_escrita.add_argument(
         "--apos",
@@ -3534,7 +3621,13 @@ def construir_parser() -> argparse.ArgumentParser:
         "conteudo",
         nargs="?",
         help="o novo texto do bloco: UMA linha de Markdown (várias linhas são "
-        "recusadas; num bloco de código, o texto inteiro é o código)",
+        "recusadas; num bloco de código, o texto inteiro é o código); '-' lê do stdin",
+    )
+    editar_bloco.add_argument(
+        "--arquivo-md",
+        dest="arquivo_md",
+        metavar="ARQUIVO",
+        help="lê o novo texto deste arquivo (útil para um bloco de código grande)",
     )
     editar_bloco.add_argument(
         "--trocar",
@@ -3716,7 +3809,13 @@ def construir_parser() -> argparse.ArgumentParser:
         "--corpo",
         help="relato completo do dia, em Markdown — SEMPRE vai no corpo da "
         "página, nunca numa propriedade. Complementa um dia já existente "
-        "(nunca sobrescreve).",
+        "(nunca sobrescreve). '-' lê do stdin.",
+    )
+    relatorio_do_dia.add_argument(
+        "--arquivo-md",
+        dest="arquivo_md",
+        metavar="ARQUIVO",
+        help="lê o relato (--corpo) deste arquivo Markdown",
     )
     relatorio_do_dia.add_argument(
         "--permitir-corpo-vazio",
@@ -3774,7 +3873,11 @@ def construir_parser() -> argparse.ArgumentParser:
     criar_subpagina.add_argument("pagina_pai_id")
     criar_subpagina.add_argument("titulo")
     criar_subpagina.add_argument(
-        "--conteudo", help="Markdown opcional já preenchido na criação da subpágina"
+        "--conteudo",
+        help="Markdown opcional já preenchido na criação da subpágina; '-' lê do stdin",
+    )
+    criar_subpagina.add_argument(
+        "--arquivo-md", dest="arquivo_md", metavar="ARQUIVO", help="lê o Markdown deste arquivo"
     )
 
     inspecionar_estrutura = sub.add_parser(

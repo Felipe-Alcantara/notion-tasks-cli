@@ -314,6 +314,24 @@ diretório corrente: a pasta vem de `--dir-backup`, da variável
 (`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
 `backup_path` sai absoluto.
 
+### Markdown longo: stdin e arquivo
+
+Os comandos que recebem Markdown (`escrever`, `editar-bloco`, `criar --conteudo`,
+`criar-subpagina --conteudo` e `relatorio-do-dia --corpo`) aceitam `-` para ler do
+stdin e `--arquivo-md <arquivo>` para ler de um arquivo UTF-8 — sem o limite de
+128 KiB por argumento do Linux (cerca de 32 mil caracteres no Windows) e sem
+escapar crases, `$` e aspas no shell:
+
+```bash
+notion-tasks escrever <id> - < nota.md
+notion-tasks escrever <id> --arquivo-md nota.md --substituir
+notion-tasks relatorio-do-dia --database <id> --resumo "..." --arquivo-md relato.md
+```
+
+Informar o texto e `--arquivo-md` juntos é recusado; `-` sem nada redirecionado
+dá erro em vez de ficar esperando o teclado. Antes desta mudança, `escrever <id> -`
+gravava um `-` literal.
+
 ### Ler blocos
 
 `blocos <page_id>` lista os blocos de topo com `{id, tipo, preview}` (o preview

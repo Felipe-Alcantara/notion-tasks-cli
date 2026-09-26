@@ -874,6 +874,104 @@ def test_criar_com_conteudo_que_falha_mantem_o_id_e_diz_que_nada_ficou():
     assert erro["proximo_passo"] == "notion-tasks escrever novo \"<markdown>\""
 
 
+MARKDOWN_COM_SHELL = "# Nota\n\nCusto `$HOME` e \"aspas\" 'simples' — ok"
+
+
+def _stdin(monkeypatch, texto: str) -> None:
+    import io
+
+    monkeypatch.setattr(cli.sys, "stdin", io.TextIOWrapper(io.BytesIO(texto.encode("utf-8"))))
+
+
+def _textos_anexados(client) -> list[str]:
+    anexados = [c[1][1] for c in client.chamadas if c[0] == "anexar_blocos"]
+    return [
+        "".join(item["text"]["content"] for item in bloco[bloco["type"]]["rich_text"])
+        for lote in anexados
+        for bloco in lote
+    ]
+
+
+def test_escrever_hifen_le_o_markdown_do_stdin(monkeypatch):
+    """Antes, 'escrever <id> -' gravava um '-' literal na página."""
+
+    _stdin(monkeypatch, MARKDOWN_COM_SHELL)
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "escrever", "page1", "-"], client=client)
+
+    assert codigo == 0
+    assert saida["dados"]["blocos_anexados"] == 2
+    assert _textos_anexados(client) == ["Nota", "Custo $HOME e \"aspas\" 'simples' — ok"]
+
+
+def test_escrever_arquivo_md(tmp_path):
+    nota = tmp_path / "nota.md"
+    nota.write_text(MARKDOWN_COM_SHELL, encoding="utf-8")
+    client = FakeClient()
+    codigo, _ = _executar(
+        ["--json", "escrever", "page1", "--arquivo-md", str(nota)], client=client
+    )
+    assert codigo == 0
+    assert _textos_anexados(client)[0] == "Nota"
+
+
+def test_escrever_recusa_conteudo_e_arquivo_md_juntos(tmp_path):
+    nota = tmp_path / "nota.md"
+    nota.write_text("x", encoding="utf-8")
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "texto", "--arquivo-md", str(nota)], client=client
+    )
+    assert codigo == 2
+    assert "--arquivo-md" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
+
+
+def test_hifen_sem_stdin_redirecionado_nao_trava(monkeypatch):
+    class Terminal:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Terminal())
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "escrever", "page1", "-"], client=client)
+    assert codigo == 2
+    assert "stdin" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
+
+
+def test_arquivo_md_inexistente_vira_erro_de_uso(tmp_path):
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "--arquivo-md", str(tmp_path / "nao-existe.md")]
+    )
+    assert codigo == 2
+    assert "nao-existe.md" in saida["erro"]["mensagem"]
+
+
+def test_criar_e_criar_subpagina_aceitam_conteudo_do_stdin(monkeypatch):
+    _stdin(monkeypatch, "## Contexto")
+    client = FakeClient()
+    codigo, _ = _executar(["--json", "criar", "Nova", "--conteudo", "-"], client=client)
+    assert codigo == 0
+    assert _textos_anexados(client) == ["Contexto"]
+
+    nota = "# README"
+    _stdin(monkeypatch, nota)
+    blocos_enviados = []
+
+    class ClienteSubpagina(FakeClient):
+        def criar_subpagina(self, pagina_pai_id, titulo, *, blocos=None):
+            blocos_enviados.append(blocos)
+            return super().criar_subpagina(pagina_pai_id, titulo, blocos=blocos)
+
+    codigo, _ = _executar(
+        ["--json", "criar-subpagina", "pai", "README", "--conteudo", "-"],
+        client=ClienteSubpagina(),
+    )
+    assert codigo == 0
+    assert blocos_enviados[0][0]["type"] == "heading_1"
+
+
 def test_editar_linha_atualiza_propriedades_por_tipo():
     client = FakeClient()
     codigo, saida = _executar(
