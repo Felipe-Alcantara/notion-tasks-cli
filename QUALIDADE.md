@@ -66,6 +66,28 @@ linhas na mesma execução. O arquivo é lido uma vez, o cliente/TaskList é
 reutilizado, o progresso sai em stderr e o envelope final separa sucessos, erros
 e criações pendentes, sem interromper o lote por uma falha individual.
 
+## Escritas de blocos e envelope de erro
+
+As escritas de blocos seguem a ordem segura da biblioteca e a borda não pode
+escondê-la: toda operação que apaga devolve os IDs (`blocos_apagados_ids`) e o
+comando de desfazer (`desfazer`; subpágina e database em `desfazer_manual`, porque
+a API não os restaura pelo endpoint de blocos); `apagar-bloco` lê o alvo antes e
+exige `--forcar-tipos-arriscados` para subpágina e database; `editar-bloco`
+confere o bloco atual e recusa várias linhas, troca de tipo e perda de
+formatação sem gravar nada.
+
+Com `--json`, nenhuma exceção pode escapar como traceback: `cli/erros.py`
+classifica cada uma num `codigo` estável pelo tipo e pelos campos estruturados,
+nunca pelo texto, e o que não tem tratamento vira `erro_interno` com o
+traceback no stderr. Um código novo precisa entrar em `CodigoErro`, que o `guia`
+lista. Os testes que reordenam blocos isolam a pasta de backup com
+`NOTION_AUTOMACOES_BACKUP_DIR` (fixture `backups_isolados`), para a suíte nunca
+gravar na pasta de estado real do usuário.
+
+Todo argumento de ID passa por `_id_notion` (regra `normalizar_id` da
+biblioteca); texto que não é UUID nem link segue para a API, o que mantém os
+doubles de teste com IDs curtos.
+
 ## Preflight de projetos
 
 `criar` e `editar-linha` aceitam `--strict` e `--dry-run` para o contrato de

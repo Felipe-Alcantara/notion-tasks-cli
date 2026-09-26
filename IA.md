@@ -754,3 +754,75 @@ certificado, que continua em `Entrada`. A task de implementação permanece em
 `Aguardando resposta`/não em andamento até essas dependências demonstrarem o
 critério assinado; as pendências já estão nas tasks relacionadas de validação e
 certificação.
+
+## [2026-09-25] Borda da auditoria de perda de dados: blocos seguros, IDs e envelope com código
+
+Registro gravado em 2026-09-26 às 02:28 (-03), ao fim da execução. Uma
+auditoria do uso real por agentes confirmou achados de perda de dados e de
+ergonomia nas escritas de blocos. A regra de negócio foi corrigida no
+`notion-starter` (commits `bd58ee9`…`484263c` daquele repositório); este
+registro cobre só a borda da CLI, que expõe o que a biblioteca passou a oferecer.
+
+**O que mudou na CLI.**
+
+- **Envelope de erro com código** (`cli/erros.py`, novo): toda exceção vira
+  `erro = {codigo, mensagem, proximo_passo, http_status, notion_code, detalhes}`,
+  classificada pelo tipo e pelos campos estruturados (`status_code`, `code` do
+  corpo), nunca pelo texto. `EscritaParcialError`, `LimpezaIncompletaError` e
+  `ReordenacaoIncompletaError` escapavam como traceback; agora trazem em
+  `detalhes` o que foi gravado, desfeito, apagado ou ficou pendente. Um 503 com
+  a escrita salva vira `escrita_salva` ("não repita"), argumento inválido com
+  `--json` vira `uso_invalido`, e o resto vira `erro_interno` com o traceback no
+  stderr. `CLIError` passou a derivar de `NotionSyncError`. Itens de lote ganham
+  `erro.codigo`; `databases_dentro` continua também no topo.
+- **IDs**: todo argumento de ID usa `normalizar_id` da biblioteca (UUID com ou
+  sem hífens, links com `?v=` ignorado, `?p=` vencendo e âncora `#bloco` em
+  argumentos de bloco); link sem ID é recusado antes da API. As comparações
+  manuais passaram a `chave_de_id`. `ler` com o ID do campo `url` deixou de dizer
+  "não encontrada".
+- **escrever**: `--apos <bloco>`/`--inicio` (recusados com `--substituir`),
+  `posicao` e `blocos_criados` na saída; `--substituir` agora escreve antes de
+  apagar e devolve `blocos_apagados_ids` e `desfazer`.
+- **limpar**/**restaurar-bloco**: IDs apagados, motivo de cada bloco preservado e
+  o comando novo `restaurar-bloco <id>...`.
+- **blocos** `--metadados/--completo/--recursivo/--contendo` e o comando novo
+  **ler-bloco**.
+- **editar-bloco**: confere o bloco atual (tipo mantido, várias linhas e troca de
+  tipo recusadas, perda de menção/sublinhado/cor só com
+  `--aceitar-perda-de-formatacao`), `--trocar/--por/--todas` e `--arquivo` para
+  lotes; a saída confirma `tipo`, `markdown` e `editado_em`.
+- **apagar-bloco**: lê o alvo, exige `--forcar-tipos-arriscados` para subpágina e
+  database, aceita vários IDs e diz o que apagou.
+- **reordenar-bloco** `--dir-backup`; o backup saiu do diretório corrente.
+- **stdin/`--arquivo-md`** nos comandos que recebem Markdown;
+  **importar-planilha** `--chave`/`--dry-run`; **conteudo** mostra o pai, a URL e
+  a última edição.
+
+**Achado da validação real.** `restaurar-bloco` de uma subpágina respondeu HTTP
+400 "Updating a page via the blocks endpoint unsupported. Call patch
+/v1/pages/:page_id instead" — a documentação de "Delete a block" manda restaurar
+bloco de página por "Update page". O `desfazer` passou a separar
+`desfazer_manual` (subpágina/database, pela Lixeira) do comando pronto. Restaurar
+página pela API fica para o `notion-starter`, que ainda não expõe esse método.
+
+**Validação.** `ruff check .` limpo; `python3 -m pytest` com 323 testes (eram
+259). 64 testes da suíte nova falham contra o código de antes deste trabalho
+(`721042c`) e passam agora. Na API real, dentro de uma subpágina-sandbox criada e
+arquivada na mesma execução, foram conferidos: stdin e `--arquivo-md`, link e ID
+sem hífens, `--apos`/`--inicio` (com os irmãos que a API devolve fora de
+`blocos_criados`), metadados e recursão, `ler-bloco`, as recusas de
+`editar-bloco` e o `--trocar` preservando código inline e link, o lote de
+edições, apagar/restaurar (um e vários IDs), a recusa de subpágina sem a flag,
+`limpar` + `desfazer`, `--substituir` preservando a subpágina, `reordenar-bloco
+--dir-backup` (arquivo `0600`, caminho absoluto), o envelope de `id_invalido`,
+404 e `uso_invalido`, a âncora recusada sem gravar nada e
+`importar-planilha --chave` com a planilha reordenada casando os mesmos
+registros.
+
+**Pendências para quem quiser contribuir.** Restaurar subpágina/database pela API
+(método no `notion-starter`); `ler` ainda lista o database inteiro para achar
+uma tarefa (a comparação com o `parent` e a leitura de uma página só dependem de
+um `TaskList.obter` na biblioteca); `--dry-run` do `editar-bloco` exigiria uma
+função de planejamento pura na biblioteca. A faixa `notion-starter>=0.3.0,<0.4.0`
+do `pyproject.toml` precisa acompanhar a próxima versão publicada do
+`notion-starter`, que é a que contém as APIs usadas aqui.
