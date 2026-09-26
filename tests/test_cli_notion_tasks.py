@@ -1244,6 +1244,46 @@ def test_reordenar_bloco_rejeita_child_database_mesmo_com_forcar(tmp_path, monke
     assert not any(c[0] == "excluir_bloco" for c in cliente.chamadas)
 
 
+def test_reordenar_bloco_nao_grava_backup_no_diretorio_corrente(tmp_path, monkeypatch):
+    """O backup (texto do workspace) caía em ./.notion-backups e ia parar no git."""
+
+    monkeypatch.chdir(tmp_path)
+    cliente = FakeReordenacaoClient([{"id": "p1", "type": "paragraph", "paragraph": {}}])
+
+    codigo, saida = _executar(
+        ["--json", "reordenar-bloco", "pagina", "p1", "--apos", "p2"], client=cliente
+    )
+
+    assert codigo == 0
+    assert not (tmp_path / ".notion-backups").exists()
+    assert Path(saida["dados"]["backup_path"]).is_absolute()
+
+
+def test_reordenar_bloco_dir_backup_escolhe_a_pasta(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    pasta = tmp_path / "meus-backups"
+    cliente = FakeReordenacaoClient([{"id": "p1", "type": "paragraph", "paragraph": {}}])
+
+    codigo, saida = _executar(
+        [
+            "--json",
+            "reordenar-bloco",
+            "pagina",
+            "p1",
+            "--apos",
+            "p2",
+            "--dir-backup",
+            str(pasta),
+        ],
+        client=cliente,
+    )
+
+    assert codigo == 0
+    backup = Path(saida["dados"]["backup_path"])
+    assert backup.parent == pasta.resolve()
+    assert json.loads(backup.read_text(encoding="utf-8"))["id"] == "p1"
+
+
 def test_reordenar_bloco_exige_exatamente_um_alvo():
     cliente = FakeReordenacaoClient([{"id": "p1", "type": "paragraph", "paragraph": {}}])
     codigo, saida = _executar(["--json", "reordenar-bloco", "pagina", "p1"], client=cliente)

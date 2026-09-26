@@ -2163,7 +2163,9 @@ def cmd_reordenar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
         bloco_id,
         apos_bloco_id=apos,
         inicio=args.inicio,
-        forcar_tipos_arriscados=args.forcar_tipos_arriscados,
+        # Sem --dir-backup a biblioteca usa a pasta de estado do usuário (nunca
+        # o diretório corrente, que pode ser um repositório git).
+        diretorio_backup=_normalizar_texto(getattr(args, "dir_backup", None)),
         cliente=client_factory(),
     )
 
@@ -2495,8 +2497,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "reordenar-bloco": [
         "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>",
         "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --inicio",
-        "python -m cli --json reordenar-bloco <pagina_id> <child_page_id> --inicio "
-        "--forcar-tipos-arriscados  # PERIGOSO: gera um ID novo para a subpágina",
+        "python -m cli --json reordenar-bloco <pagina_id> <bloco_id> --inicio "
+        "--dir-backup ~/notion-backups",
     ],
     "garantir-coluna": [
         "python -m cli --json garantir-coluna <database_id> Idioma select",
@@ -3055,12 +3057,13 @@ def construir_parser() -> argparse.ArgumentParser:
 
     reordenar_bloco = sub.add_parser(
         "reordenar-bloco",
-        help="move um bloco existente para outra posição na mesma página. A API do "
-        "Notion não move blocos: isto apaga e recria — sempre grava um backup em "
-        "JSON antes. child_database NUNCA é suportado (a API não recria um database "
-        "por este caminho; use criar-database + importar-planilha). child_page é "
-        "PERIGOSO: apagar e recriar gera um ID NOVO e quebra links/backlinks salvos "
-        "para o ID antigo; exige --forcar-tipos-arriscados",
+        help="MOVE um bloco que já existe para outra posição na mesma página (para "
+        "INSERIR texto novo num ponto, use 'escrever --apos'). A API do Notion não "
+        "move blocos: isto grava um backup em JSON, cria a cópia na posição pedida e "
+        "só então apaga o original — o bloco ganha um ID NOVO. Só texto simples "
+        "sem filhos (parágrafo, títulos, listas, to-do, citação, callout, toggle, "
+        "código, divisória); subpágina, database, tabela, imagem, colunas e blocos "
+        "com filhos são recusados sem apagar nada",
     )
     reordenar_bloco.add_argument("pagina_id", help="página que contém o bloco como filho direto")
     reordenar_bloco.add_argument("bloco_id")
@@ -3069,10 +3072,18 @@ def construir_parser() -> argparse.ArgumentParser:
         "--inicio", action="store_true", help="move para o início da lista de filhos"
     )
     reordenar_bloco.add_argument(
+        "--dir-backup",
+        dest="dir_backup",
+        metavar="PASTA",
+        help="pasta do backup em JSON (padrão: NOTION_AUTOMACOES_BACKUP_DIR ou a pasta "
+        "de estado do usuário, ~/.local/state/notion-automacoes/backups; nunca o "
+        "diretório corrente). A saída traz o caminho absoluto em 'backup_path'",
+    )
+    reordenar_bloco.add_argument(
         "--forcar-tipos-arriscados",
         action="store_true",
-        help="confirma mover um child_page mesmo sabendo que o ID muda "
-        "(child_database nunca é suportado, mesmo com esta flag)",
+        help="sem efeito, mantida para scripts antigos: subpágina e database nunca "
+        "são reordenados (a API não os recria por este caminho)",
     )
 
     garantir_coluna = sub.add_parser(

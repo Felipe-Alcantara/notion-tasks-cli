@@ -250,7 +250,7 @@ notion-tasks inspecionar-estrutura <pagina_id> --profundidade 3
 notion-tasks clonar-estrutura <pagina_referencia_id> <pagina_destino_id>
 notion-tasks montar-estrutura-projeto <pagina_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>
-notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio
+notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio --dir-backup ~/notion-backups
 notion-tasks garantir-coluna <database_id> Idioma select
 
 # Relatórios diários
@@ -292,6 +292,19 @@ Use `--dry-run` para executar o preflight e visualizar as propriedades/relação
 planejadas sem criar ou editar nada. Com `--arquivo --strict`, todas as linhas
 são validadas primeiro; uma entrada inválida bloqueia o lote inteiro para evitar
 escrita parcial. `--arquivo --dry-run` mostra o plano de cada linha.
+
+### Blocos: mover sem perder nada
+
+`reordenar-bloco` **move** um bloco que já existe. Como a API do Notion não move
+blocos, o comando grava um backup em JSON, cria a cópia na posição pedida e só
+então apaga o original (o bloco ganha um ID novo, devolvido em `bloco_id_novo`).
+Só blocos de texto sem filhos são aceitos; subpágina, database, tabela, imagem,
+colunas e blocos com filhos são recusados antes de qualquer escrita
+(`--forcar-tipos-arriscados` ficou sem efeito). O backup nunca vai para o
+diretório corrente: a pasta vem de `--dir-backup`, da variável
+`NOTION_AUTOMACOES_BACKUP_DIR` ou da pasta de estado do usuário
+(`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
+`backup_path` sai absoluto.
 
 Também funciona como módulo com `python -m cli ...`. Execute
 `notion-tasks --help` para consultar o guia completo e os demais subcomandos.

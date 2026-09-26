@@ -16,7 +16,21 @@ if str(_ROOT) not in sys.path:
 if _STARTER_SRC.exists() and str(_STARTER_SRC) not in sys.path:
     sys.path.insert(0, str(_STARTER_SRC))
 
+from notion_starter.services.backups import VARIAVEL_DIRETORIO_BACKUP  # noqa: E402
+
 from core import workspaces  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def backups_isolados(tmp_path_factory, monkeypatch):
+    """Manda os backups em JSON de ``reordenar-bloco`` para uma pasta temporária.
+
+    O backup deixou de cair no diretório corrente (onde acabava versionado
+    num repositório git) e passou para a pasta de estado do usuário. Sem esta
+    fixture, a suíte gravaria nessa pasta real a cada teste de reordenação.
+    """
+
+    monkeypatch.setenv(VARIAVEL_DIRETORIO_BACKUP, str(tmp_path_factory.mktemp("backups")))
 
 
 @pytest.fixture(autouse=True)
