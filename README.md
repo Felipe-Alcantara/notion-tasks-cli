@@ -260,6 +260,7 @@ notion-tasks montar-estrutura-projeto <pagina_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio --dir-backup ~/notion-backups
 notion-tasks garantir-coluna <database_id> Idioma select
+notion-tasks importar-planilha <database_id> contas.csv --chave Email --dry-run
 
 # Relatórios diários
 notion-tasks exportar-docx --database <id> --de 2026-07-01 --ate 2026-07-06 --saida ./exports
@@ -411,6 +412,16 @@ de database) é ignorado e `?p=` (página aberta em painel) vence. Em argumentos
 de bloco (`editar-bloco`, `apagar-bloco`, `restaurar-bloco`, `reordenar-bloco`,
 `--apos`), a âncora `#<id>` do link aponta o bloco. Um link sem ID é recusado
 antes da API (`id_invalido`).
+
+### Importar planilha sem trocar registros
+
+`importar-planilha` faz upsert pela coluna `Origem`. Sem chave, a origem é a
+posição da linha (`arquivo:linha`): reordenar a planilha fazia um registro
+sobrescrever outro. Agora uma linha cuja página achada tem outro título vai para
+`conflitos` (nada é gravado para ela), e `--chave <Coluna>` casa pelo registro
+(`arquivo#Coluna=valor`; chave vazia ou repetida é recusada antes de gravar).
+`--dry-run` não grava nada e devolve os contadores e os conflitos com
+`simulado: true`.
 
 ### Envelope JSON e códigos de erro
 

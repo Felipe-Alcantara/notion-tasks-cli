@@ -2923,8 +2923,14 @@ def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFac
         coluna_titulo=_normalizar_texto(args.coluna_titulo),
         tipos=_pares_chave_valor(args.tipo, "--tipo"),
         renomear=_pares_chave_valor(args.renomear, "--renomear"),
+        chave=_normalizar_texto(getattr(args, "chave", None)),
     )
-    resultado = svc_ingestao.ingerir(fonte, client=client_factory(), database_id=database_id)
+    resultado = svc_ingestao.ingerir(
+        fonte,
+        client=client_factory(),
+        database_id=database_id,
+        simular=getattr(args, "dry_run", False) is True,
+    )
     return {
         "database_id": database_id,
         "arquivo": caminho,
@@ -2933,8 +2939,10 @@ def cmd_importar_planilha(args: argparse.Namespace, *, client_factory: ClientFac
         "erros": resultado.erros,
         "itens_processados": resultado.itens_processados,
         # Mantém a borda compatível durante atualizações em que o CLI chega
-        # antes da versão do notion-starter que introduziu ResultadoIngestao.falhas.
+        # antes da versão do notion-starter que introduziu estes campos.
         "falhas": getattr(resultado, "falhas", []),
+        "conflitos": getattr(resultado, "conflitos", []),
+        "simulado": getattr(resultado, "simulado", False),
     }
 
 
@@ -3181,6 +3189,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         '--aba Contas --tipo "Seguidores=numero" --tipo "Criada em=data"',
         "python -m cli --json importar-planilha <database_id> contas.csv "
         '--renomear "Email=E-mail de acesso"',
+        "python -m cli --json importar-planilha <database_id> contas.csv --chave Email "
+        "--dry-run",
     ],
     "anexar-arquivo": [
         "python -m cli --json anexar-arquivo <page_id> relatorio.docx",
@@ -4045,7 +4055,8 @@ def construir_parser() -> argparse.ArgumentParser:
 
     importar_planilha = sub.add_parser(
         "importar-planilha",
-        help="importa .xlsx/.csv para um database (upsert idempotente por Origem)",
+        help="importa .xlsx/.csv para um database (upsert idempotente por Origem; use "
+        "--chave para casar pelo registro e --dry-run para ver o plano)",
     )
     importar_planilha.add_argument("database_id", help="database de destino")
     importar_planilha.add_argument("caminho", help="arquivo .xlsx ou .csv")
@@ -4066,6 +4077,22 @@ def construir_parser() -> argparse.ArgumentParser:
         "--renomear",
         action="append",
         help='mapeia coluna para propriedade: "Coluna=Nome no Notion"',
+    )
+    importar_planilha.add_argument(
+        "--chave",
+        metavar="COLUNA",
+        help="coluna que identifica cada registro (ex.: Email): a Origem passa a ser "
+        "'arquivo#Coluna=valor' e reordenar a planilha não troca registros. Chave "
+        "vazia ou repetida é recusada antes de gravar. Sem --chave vale a posição da "
+        "linha, e uma linha cuja página achada tem outro título vai para 'conflitos' "
+        "em vez de sobrescrever",
+    )
+    importar_planilha.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="não grava nada: os contadores e 'conflitos' dizem o que seria feito "
+        "(as páginas existentes são lidas)",
     )
 
     anexar = sub.add_parser(

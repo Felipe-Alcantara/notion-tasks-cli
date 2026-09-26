@@ -2459,6 +2459,47 @@ def test_importar_planilha_csv_upsert(tmp_path):
     assert props["Seguidores"] == {"number": 1614}
 
 
+def test_importar_planilha_dry_run_nao_grava_nada(tmp_path):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome,Seguidores\nConta A,1.614\n", encoding="utf-8")
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha), "--dry-run"], client=fake
+    )
+    assert codigo == 0
+    assert saida["dados"]["simulado"] is True
+    assert saida["dados"]["criados"] == 1
+    assert saida["dados"]["conflitos"] == []
+    assert not any(c[0] in ("criar_pagina", "atualizar_pagina") for c in fake.chamadas)
+
+
+def test_importar_planilha_chave_identifica_o_registro_pela_coluna(tmp_path):
+    """Sem chave, a Origem é a posição da linha: reordenar a planilha trocava registros."""
+
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome,Email\nAna,ana@x.com\n", encoding="utf-8")
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha), "--chave", "Email"], client=fake
+    )
+    assert codigo == 0
+    props = [c for c in fake.chamadas if c[0] == "criar_pagina"][0][1][1]
+    origem = "".join(item["text"]["content"] for item in props["Origem"]["rich_text"])
+    assert origem.endswith("#Email=ana@x.com")
+
+
+def test_importar_planilha_chave_inexistente_nao_grava(tmp_path):
+    planilha = tmp_path / "contas.csv"
+    planilha.write_text("Nome\nAna\n", encoding="utf-8")
+    fake = FakeNovosClient()
+    codigo, saida = _executar(
+        ["--json", "importar-planilha", "db1", str(planilha), "--chave", "Email"], client=fake
+    )
+    assert codigo == 2
+    assert "Email" in saida["erro"]["mensagem"]
+    assert not any(c[0] == "criar_pagina" for c in fake.chamadas)
+
+
 def test_importar_planilha_relata_motivo_das_falhas(tmp_path):
     planilha = tmp_path / "contas.csv"
     planilha.write_text("Nome,Seguidores\nConta A,1.614\n", encoding="utf-8")
