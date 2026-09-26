@@ -35,6 +35,7 @@ from notion_starter import schema as starter_schema  # noqa: E402
 from notion_starter.exceptions import (  # noqa: E402
     EdicaoMultiblocoError,
     EscritaParcialError,
+    ExclusaoArriscadaError,
     IdNotionInvalidoError,
     PerdaDeFormatacaoError,
     TrechoAmbiguoError,
@@ -334,7 +335,12 @@ def _formatar_lote(dados: dict[str, Any]) -> str:
         f"erros: {dados['erros']} | pendentes: {dados['pendentes']}"
     ]
     for item in dados["resultados"]:
-        referencia = item.get("page_id") or item.get("nome") or f"linha {item['indice']}"
+        referencia = (
+            item.get("page_id")
+            or item.get("block_id")
+            or item.get("nome")
+            or f"linha {item['indice']}"
+        )
         estado = item["estado"].upper()
         mensagem = (item.get("erro") or {}).get("mensagem")
         sufixo = f": {mensagem}" if mensagem else ""
@@ -1233,11 +1239,12 @@ def _resultado_lote(
     estado: str,
     *,
     page_id: str | None = None,
+    block_id: str | None = None,
     nome: str | None = None,
     dados: Any = None,
     erro: Exception | None = None,
 ) -> dict[str, Any]:
-    """Cria o registro estável de uma linha processada."""
+    """Cria o registro estável de uma linha (ou bloco) processada."""
 
     resultado: dict[str, Any] = {
         "indice": indice,
@@ -1246,6 +1253,8 @@ def _resultado_lote(
     }
     if page_id is not None:
         resultado["page_id"] = page_id
+    if block_id is not None:
+        resultado["block_id"] = block_id
     if nome is not None:
         resultado["nome"] = nome
     if dados is not None:
@@ -1256,14 +1265,14 @@ def _resultado_lote(
 
 
 def _resumo_lote(
-    comando: str, caminho: Path, resultados: list[dict[str, Any]]
+    comando: str, caminho: Path | None, resultados: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Monta o resumo final do lote."""
+    """Monta o resumo final do lote (``arquivo`` é ``None`` quando os itens vêm do argv)."""
 
     return {
         "modo": "lote",
         "comando": comando,
-        "arquivo": str(caminho),
+        "arquivo": str(caminho) if caminho is not None else None,
         "total": len(resultados),
         "processados": len(resultados),
         "sucessos": sum(item["estado"] == "sucesso" for item in resultados),
@@ -2019,14 +2028,77 @@ def _trocar_trecho(
 
 
 def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
-    block_id = _id_notion(args.block_id, "block_id", bloco=True)
+    """Manda um ou mais blocos para a lixeira, conferindo cada alvo antes.
+
+    Cada bloco é lido antes do DELETE (``apagar_bloco_verificado``): subpágina
+    e database — que levam tudo o que está dentro — exigem
+    ``--forcar-tipos-arriscados``, e a saída diz o que foi apagado e como
+    desfazer. Com vários IDs, o envelope é o de lote: um erro não interrompe
+    os demais.
+    """
+
+    ids = _ids_unicos(args.block_ids)
     # Operação destrutiva: exige confirmação explícita, nunca apaga "no susto".
     if not args.sim:
         raise CLIError(
             "Apagar é destrutivo. Repita com --sim para confirmar a exclusão do bloco."
         )
-    svc_conteudo.excluir_bloco(block_id, cliente=client_factory())
-    return {"id": block_id, "apagado": True}
+    forcar = getattr(args, "forcar_tipos_arriscados", False) is True
+    cliente = client_factory()
+    if len(ids) == 1:
+        return _apagar_um_bloco(ids[0], forcar=forcar, cliente=cliente)
+
+    resultados: list[dict[str, Any]] = []
+    apagados: list[str] = []
+    for indice, block_id in enumerate(ids, start=1):
+        try:
+            dados = _apagar_um_bloco(block_id, forcar=forcar, cliente=cliente)
+        except Exception as erro:  # noqa: BLE001 - o lote relata cada ID sem parar
+            resultados.append(_resultado_lote(indice, "erro", block_id=block_id, erro=erro))
+            continue
+        apagados.append(block_id)
+        resultados.append(_resultado_lote(indice, "sucesso", block_id=block_id, dados=dados))
+    resumo = _resumo_lote("apagar-bloco", None, resultados)
+    if apagados:
+        resumo["desfazer"] = comando_restaurar(apagados)
+    return resumo
+
+
+def _ids_unicos(valores: Sequence[str]) -> list[str]:
+    """IDs de bloco normalizados, na ordem, sem repetir o mesmo bloco."""
+
+    vistos: set[str] = set()
+    ids: list[str] = []
+    for valor in valores:
+        block_id = _id_notion(valor, "block_id", bloco=True)
+        if chave_de_id(block_id) not in vistos:
+            vistos.add(chave_de_id(block_id))
+            ids.append(block_id)
+    return ids
+
+
+def _apagar_um_bloco(block_id: str, *, forcar: bool, cliente: NotionClient) -> dict[str, Any]:
+    try:
+        apagado = svc_conteudo.apagar_bloco_verificado(
+            block_id, forcar_tipos_arriscados=forcar, cliente=cliente
+        )
+    except ExclusaoArriscadaError as erro:
+        alvo = "a subpágina" if erro.tipo == "child_page" else "o database"
+        raise CLIError(
+            f"O bloco {block_id} é {alvo} '{erro.titulo or '(sem título)'}': apagá-lo manda "
+            "para a lixeira tudo o que está dentro. Nada foi apagado. Se é isso mesmo, "
+            "repita com --forcar-tipos-arriscados.",
+            codigo="exclusao_arriscada",
+            detalhes={"tipo": erro.tipo, "titulo": erro.titulo},
+        ) from erro
+    return {
+        "id": apagado.id,
+        "apagado": True,
+        "tipo": apagado.tipo,
+        "resumo": apagado.resumo,
+        "tem_filhos": apagado.tem_filhos,
+        "desfazer": comando_restaurar([apagado.id]),
+    }
 
 
 def _texto_par_relacao(valor: Any, origem: str) -> str:
@@ -2787,7 +2859,11 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         'python -m cli --json editar-bloco <block_id> --trocar "20:12" --por "20:15"',
         'python -m cli --json editar-bloco <block_id> --trocar "v1" --por "v2" --todas',
     ],
-    "apagar-bloco": ["python -m cli --json apagar-bloco <block_id> --sim"],
+    "apagar-bloco": [
+        "python -m cli --json apagar-bloco <block_id> --sim",
+        "python -m cli --json apagar-bloco <id1> <id2> <id3> --sim",
+        "python -m cli --json apagar-bloco <child_page_id> --sim --forcar-tipos-arriscados",
+    ],
     "limpar": [
         "python -m cli --json limpar <page_id> --sim",
         "python -m cli --json limpar <page_id> --sim --apagar-tudo",
@@ -3327,10 +3403,22 @@ def construir_parser() -> argparse.ArgumentParser:
 
     apagar_bloco = sub.add_parser(
         "apagar-bloco",
-        help="apaga (arquiva) um bloco — destrutivo (pegue o block_id em 'blocos')",
+        help="manda um ou mais blocos para a lixeira — destrutivo (pegue o block_id em "
+        "'blocos'). Lê cada bloco antes: subpágina e database (que levam tudo o que "
+        "está dentro) exigem --forcar-tipos-arriscados. A saída diz o tipo, um resumo "
+        "e, em 'desfazer', o comando 'restaurar-bloco' pronto. Com vários IDs, "
+        "envelope de lote (um erro não para os demais)",
     )
-    apagar_bloco.add_argument("block_id")
+    apagar_bloco.add_argument(
+        "block_ids", nargs="+", metavar="block_id", help="um ou mais IDs de bloco"
+    )
     apagar_bloco.add_argument("--sim", action="store_true", help="confirma a exclusão")
+    apagar_bloco.add_argument(
+        "--forcar-tipos-arriscados",
+        action="store_true",
+        help="permite apagar subpágina (child_page) ou database (child_database), com "
+        "tudo o que está dentro — é o caso de arquivar uma página inteira",
+    )
 
     limpar = sub.add_parser(
         "limpar",

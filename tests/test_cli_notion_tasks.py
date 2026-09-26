@@ -271,6 +271,22 @@ class FakeClient:
         self.chamadas.append(("restaurar_bloco", block_id))
         return {"id": block_id, "in_trash": False}
 
+    def obter_bloco(self, block_id):
+        self.chamadas.append(("obter_bloco", block_id))
+        if block_id.startswith("sub"):
+            return {
+                "id": block_id,
+                "type": "child_page",
+                "child_page": {"title": "Sandbox inteira"},
+                "has_children": True,
+            }
+        return {
+            "id": block_id,
+            "type": "paragraph",
+            "paragraph": {"rich_text": [{"plain_text": f"texto de {block_id}"}]},
+            "has_children": False,
+        }
+
     def criar_subpagina(self, pagina_pai_id, titulo, *, blocos=None):
         self.chamadas.append(("criar_subpagina", (pagina_pai_id, titulo)))
         return {"id": f"sub-{titulo}", "url": f"https://notion.so/sub-{titulo}"}
@@ -1252,6 +1268,64 @@ def test_apagar_bloco_com_sim_apaga():
     assert codigo == 0
     assert saida["dados"]["apagado"] is True
     assert ("excluir_bloco", "b1") in client.chamadas
+
+
+def test_apagar_bloco_diz_o_que_apagou_e_como_desfazer():
+    """A resposta era igual para um parágrafo e para uma página inteira."""
+
+    codigo, saida = _executar(["--json", "apagar-bloco", "b1", "--sim"], client=FakeClient())
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["id"] == "b1"
+    assert dados["tipo"] == "paragraph"
+    assert dados["resumo"] == "texto de b1"
+    assert dados["tem_filhos"] is False
+    assert dados["desfazer"] == "notion-tasks restaurar-bloco b1"
+
+
+def test_apagar_bloco_de_subpagina_sem_forcar_nao_apaga():
+    """Medido: apagar o ID de uma subpágina mandou 11 subpáginas e 2 databases à lixeira."""
+
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "apagar-bloco", "sub1", "--sim"], client=client)
+
+    assert codigo == 2
+    erro = saida["erro"]
+    assert erro["codigo"] == "exclusao_arriscada"
+    assert erro["detalhes"] == {"tipo": "child_page", "titulo": "Sandbox inteira"}
+    assert "--forcar-tipos-arriscados" in erro["mensagem"]
+    assert not any(c[0] == "excluir_bloco" for c in client.chamadas)
+
+
+def test_apagar_bloco_de_subpagina_com_forcar_apaga():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "apagar-bloco", "sub1", "--sim", "--forcar-tipos-arriscados"], client=client
+    )
+    assert codigo == 0
+    assert saida["dados"]["tipo"] == "child_page"
+    assert saida["dados"]["resumo"] == "Sandbox inteira"
+    assert ("excluir_bloco", "sub1") in client.chamadas
+
+
+def test_apagar_varios_blocos_continua_depois_de_um_erro():
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "apagar-bloco", "b1", "sub1", "b3", "b1", "--sim"], client=client
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["modo"] == "lote"
+    assert dados["comando"] == "apagar-bloco"
+    # O ID repetido é processado uma vez só.
+    assert dados["total"] == 3
+    assert dados["sucessos"] == 2
+    assert dados["erros"] == 1
+    assert [r["block_id"] for r in dados["resultados"]] == ["b1", "sub1", "b3"]
+    assert dados["resultados"][1]["erro"]["codigo"] == "exclusao_arriscada"
+    assert dados["desfazer"] == "notion-tasks restaurar-bloco b1 b3"
+    assert [c[1] for c in client.chamadas if c[0] == "excluir_bloco"] == ["b1", "b3"]
 
 
 def test_blocos_lista_ids_para_editar_ou_apagar():

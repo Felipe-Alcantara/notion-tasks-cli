@@ -246,7 +246,8 @@ notion-tasks escrever <id> "<markdown>" --apos <block_id>   # insere depois do b
 notion-tasks escrever <id> "<markdown>" --inicio            # insere no começo
 notion-tasks editar-bloco <id> "<texto>"
 notion-tasks editar-bloco <id> --trocar "20:12" --por "20:15"   # só o trecho
-notion-tasks apagar-bloco <id> --sim
+notion-tasks apagar-bloco <id> [<id> ...] --sim
+notion-tasks apagar-bloco <child_page_id> --sim --forcar-tipos-arriscados   # página inteira
 notion-tasks limpar <id> --sim
 notion-tasks restaurar-bloco <block_id> [<block_id> ...]
 notion-tasks clonar-database <id>
@@ -349,6 +350,17 @@ reescrita é recusada com a lista do que se perderia; `--trocar "<antigo>" --por
 "<novo>"` (`--todas` para todas as ocorrências) muda só o trecho e mantém o resto,
 e `--aceitar-perda-de-formatacao` reescreve mesmo assim. A saída confirma `tipo`,
 `markdown` e `editado_em` a partir da resposta da API.
+
+### Apagar blocos
+
+`apagar-bloco <id> [<id> ...] --sim` lê cada bloco antes de apagá-lo. Subpágina
+(`child_page`) e database (`child_database`) levam para a lixeira tudo o que está
+dentro, então exigem `--forcar-tipos-arriscados` — é o caso de arquivar uma
+página inteira, como uma subpágina de rascunho. A saída diz `tipo`, `resumo`
+(título ou início do texto), `tem_filhos` e, em `desfazer`, o comando
+`restaurar-bloco` pronto. Com vários IDs, o envelope é o de lote (`modo: lote`,
+um resultado por ID, sem parar no primeiro erro); o mesmo ID repetido é
+processado uma vez.
 
 ### Limpar, substituir e desfazer
 
