@@ -1473,6 +1473,27 @@ def test_apagar_bloco_de_subpagina_com_forcar_apaga():
     assert saida["dados"]["tipo"] == "child_page"
     assert saida["dados"]["resumo"] == "Sandbox inteira"
     assert ("excluir_bloco", "sub1") in client.chamadas
+    # Medido: PATCH /blocks não restaura página (HTTP 400 "Updating a page via the
+    # blocks endpoint unsupported"); não se sugere um desfazer que falha.
+    assert "desfazer" not in saida["dados"]
+    assert saida["dados"]["desfazer_manual"]["ids"] == ["sub1"]
+    assert "Lixeira" in saida["dados"]["desfazer_manual"]["como"]
+
+
+def test_limpar_apagar_tudo_separa_o_desfazer_de_blocos_e_de_paginas():
+    client = FakeClient()
+    client.ler_blocos = lambda *a, **k: [
+        {"id": "sub9", "type": "child_page", "child_page": {"title": "X"}},
+        {"id": "b1", "type": "paragraph", "paragraph": {"rich_text": []}},
+    ]
+    codigo, saida = _executar(
+        ["--json", "limpar", "page1", "--sim", "--apagar-tudo"], client=client
+    )
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["blocos_apagados"] == 2
+    assert dados["desfazer"] == "notion-tasks restaurar-bloco b1"
+    assert dados["desfazer_manual"]["ids"] == ["sub9"]
 
 
 def test_apagar_varios_blocos_continua_depois_de_um_erro():

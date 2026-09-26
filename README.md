@@ -383,7 +383,11 @@ colunas `block_id`, `conteudo`, `trocar`, `por` e `todas`.
 dentro, então exigem `--forcar-tipos-arriscados` — é o caso de arquivar uma
 página inteira, como uma subpágina de rascunho. A saída diz `tipo`, `resumo`
 (título ou início do texto), `tem_filhos` e, em `desfazer`, o comando
-`restaurar-bloco` pronto. Com vários IDs, o envelope é o de lote (`modo: lote`,
+`restaurar-bloco` pronto. Subpágina e database **não** voltam por
+`restaurar-bloco` — a API só os restaura pelo endpoint de página/database (medido:
+HTTP 400 "Updating a page via the blocks endpoint unsupported"), que a biblioteca
+ainda não expõe —, então eles aparecem em `desfazer_manual` e voltam pela Lixeira
+do Notion. Com vários IDs, o envelope é o de lote (`modo: lote`,
 um resultado por ID, sem parar no primeiro erro); o mesmo ID repetido é
 processado uma vez.
 

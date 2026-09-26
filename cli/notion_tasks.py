@@ -59,7 +59,7 @@ from cli.erros import (  # noqa: E402
     CLIError,
     ErroClassificado,
     classificar_erro,
-    comando_restaurar,
+    dados_desfazer,
 )
 from core import workspaces as perfis_workspace  # noqa: E402
 from core.config import carregar_env_file  # noqa: E402
@@ -1915,8 +1915,7 @@ def _dados_limpeza(limpeza: svc_conteudo.ResultadoLimpeza) -> dict[str, Any]:
             for bloco_id, tipo in limpeza.preservados
         ],
     }
-    if limpeza.apagados_ids:
-        dados["desfazer"] = comando_restaurar([bloco_id for bloco_id, _ in limpeza.apagados_ids])
+    dados.update(dados_desfazer(limpeza.apagados_ids))
     return dados
 
 
@@ -2291,18 +2290,17 @@ def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
         return _apagar_um_bloco(ids[0], forcar=forcar, cliente=cliente)
 
     resultados: list[dict[str, Any]] = []
-    apagados: list[str] = []
+    apagados: list[tuple[str, str]] = []
     for indice, block_id in enumerate(ids, start=1):
         try:
             dados = _apagar_um_bloco(block_id, forcar=forcar, cliente=cliente)
         except Exception as erro:  # noqa: BLE001 - o lote relata cada ID sem parar
             resultados.append(_resultado_lote(indice, "erro", block_id=block_id, erro=erro))
             continue
-        apagados.append(block_id)
+        apagados.append((dados["id"], dados["tipo"]))
         resultados.append(_resultado_lote(indice, "sucesso", block_id=block_id, dados=dados))
     resumo = _resumo_lote("apagar-bloco", None, resultados)
-    if apagados:
-        resumo["desfazer"] = comando_restaurar(apagados)
+    resumo.update(dados_desfazer(apagados))
     return resumo
 
 
@@ -2339,7 +2337,7 @@ def _apagar_um_bloco(block_id: str, *, forcar: bool, cliente: NotionClient) -> d
         "tipo": apagado.tipo,
         "resumo": apagado.resumo,
         "tem_filhos": apagado.tem_filhos,
-        "desfazer": comando_restaurar([apagado.id]),
+        **dados_desfazer([(apagado.id, apagado.tipo)]),
     }
 
 
@@ -3749,7 +3747,8 @@ def construir_parser() -> argparse.ArgumentParser:
         "restaurar-bloco",
         help="tira da lixeira blocos apagados por 'limpar', 'escrever --substituir' "
         "ou 'apagar-bloco', pelo ID (a saída deles traz os IDs e o comando pronto em "
-        "'desfazer'). O bloco volta no FIM da página, com o mesmo ID e os filhos",
+        "'desfazer'). O bloco volta no FIM da página, com o mesmo ID e os filhos. "
+        "Subpágina e database NÃO voltam por aqui (a API recusa): use a Lixeira do Notion",
     )
     restaurar_bloco.add_argument(
         "block_ids", nargs="+", metavar="block_id", help="um ou mais IDs de bloco"

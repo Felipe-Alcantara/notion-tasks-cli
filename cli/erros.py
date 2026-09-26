@@ -269,6 +269,33 @@ def comando_restaurar(ids: list[str]) -> str:
     return "notion-tasks restaurar-bloco " + " ".join(ids)
 
 
+#: Blocos que ``restaurar-bloco`` (PATCH /blocks/{id}) não traz de volta. A
+#: documentação de "Delete a block" manda restaurar bloco de página por "Update
+#: page", e a API respondeu 400 "Updating a page via the blocks endpoint
+#: unsupported" (medido para child_page); child_database vai junto por analogia.
+TIPOS_SEM_RESTAURACAO_POR_BLOCO = frozenset({"child_page", "child_database"})
+
+_COMO_RESTAURAR_PAGINA = (
+    "Subpágina e database não voltam por 'restaurar-bloco': a API só os restaura "
+    "pelo endpoint de página/database, que a biblioteca ainda não expõe. Restaure "
+    "pela Lixeira do Notion."
+)
+
+
+def dados_desfazer(apagados: list[tuple[str, str]]) -> dict[str, Any]:
+    """``desfazer`` (comando pronto) para os blocos e ``desfazer_manual`` para páginas."""
+
+    sem_bloco = TIPOS_SEM_RESTAURACAO_POR_BLOCO
+    blocos = [bloco_id for bloco_id, tipo in apagados if tipo not in sem_bloco]
+    paginas = [bloco_id for bloco_id, tipo in apagados if tipo in sem_bloco]
+    dados: dict[str, Any] = {}
+    if blocos:
+        dados["desfazer"] = comando_restaurar(blocos)
+    if paginas:
+        dados["desfazer_manual"] = {"ids": paginas, "como": _COMO_RESTAURAR_PAGINA}
+    return dados
+
+
 # -- Escritas que começaram --------------------------------------------------------
 
 
@@ -306,6 +333,7 @@ def _escrita_parcial(exc: EscritaParcialError) -> ErroClassificado:
 
 def _limpeza_incompleta(exc: LimpezaIncompletaError) -> ErroClassificado:
     apagados = [bloco_id for bloco_id, _ in exc.apagados]
+    desfazer = dados_desfazer(exc.apagados)
     pendentes = [bloco_id for bloco_id, _ in exc.pendentes]
     mensagem = (
         f"A limpeza parou no meio ({_texto_causa(exc.causa) or 'causa desconhecida'}). "
@@ -323,13 +351,14 @@ def _limpeza_incompleta(exc: LimpezaIncompletaError) -> ErroClassificado:
         codigo="limpeza_incompleta",
         mensagem=mensagem,
         saida=SAIDA_FALHA,
-        proximo_passo=comando_restaurar(apagados) if apagados else None,
+        proximo_passo=desfazer.get("desfazer"),
         http_status=http.status_code if http else None,
         notion_code=http.codigo if http else None,
         detalhes={
             "blocos_apagados_ids": _pares(exc.apagados),
             "pendentes": _pares(exc.pendentes),
             "blocos_novos": list(exc.blocos_novos),
+            **desfazer,
         },
     )
 
