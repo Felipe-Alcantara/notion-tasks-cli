@@ -740,6 +740,124 @@ def test_escrever_anexa_blocos():
     assert any(c[0] == "anexar_blocos" for c in client.chamadas)
 
 
+class FakeClientComIds(FakeClient):
+    """Anexar como a API: devolve IDs e, com posição, também os irmãos seguintes.
+
+    Medido na API real (2022-06-28): com ``position``, ``results`` traz os
+    blocos novos seguidos de todos os irmãos que vêm depois deles.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sequencia = 0
+
+    def anexar_blocos(self, block_id, blocos, *, apos_bloco_id=None, no_inicio=False):
+        self.chamadas.append(("anexar_blocos", (block_id, apos_bloco_id, no_inicio)))
+        novos = []
+        for bloco in blocos:
+            self._sequencia += 1
+            novos.append({"id": f"novo-{self._sequencia}", **bloco})
+        irmaos = [{"id": "irmao-1", "type": "paragraph", "paragraph": {"rich_text": []}}]
+        return {"results": novos + (irmaos if apos_bloco_id or no_inicio else [])}
+
+
+def test_escrever_devolve_os_ids_criados_e_a_posicao():
+    client = FakeClientComIds()
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "# Título\n\ntexto"], client=client
+    )
+
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["posicao"] == {"tipo": "fim"}
+    assert dados["blocos_criados"] == [
+        {"id": "novo-1", "tipo": "heading_1"},
+        {"id": "novo-2", "tipo": "paragraph"},
+    ]
+
+
+def test_escrever_apos_insere_depois_do_bloco_e_ignora_os_irmaos_devolvidos():
+    """Antes o agente reordenava (apagar e recriar) o que era só uma inserção."""
+
+    client = FakeClientComIds()
+    ancora = "2" * 32
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "linha nova", "--apos", ancora], client=client
+    )
+
+    assert codigo == 0
+    esperado = "22222222-2222-2222-2222-222222222222"
+    assert ("anexar_blocos", ("page1", esperado, False)) in client.chamadas
+    dados = saida["dados"]
+    assert dados["posicao"] == {"tipo": "apos_bloco", "bloco_id": esperado}
+    # O irmão seguinte que a API devolve junto não é um bloco criado.
+    assert dados["blocos_criados"] == [{"id": "novo-1", "tipo": "paragraph"}]
+    assert not any(c[0] == "excluir_bloco" for c in client.chamadas)
+
+
+def test_escrever_inicio_insere_no_comeco():
+    client = FakeClientComIds()
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "primeiro", "--inicio"], client=client
+    )
+
+    assert codigo == 0
+    assert ("anexar_blocos", ("page1", None, True)) in client.chamadas
+    assert saida["dados"]["posicao"] == {"tipo": "inicio"}
+
+
+def test_escrever_posicao_com_substituir_e_recusada_sem_tocar_na_pagina():
+    client = FakeClientComIds()
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "x", "--inicio", "--substituir"], client=client
+    )
+
+    assert codigo == 2
+    assert "--substituir" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
+
+
+def test_escrever_apos_e_inicio_juntos_sao_recusados():
+    codigo, saida = _executar(
+        ["--json", "escrever", "page1", "x", "--inicio", "--apos", "b1"],
+        client=FakeClientComIds(),
+    )
+
+    assert codigo == 2
+    assert saida["erro"]["codigo"] == "uso_invalido"
+
+
+def test_criar_com_conteudo_devolve_os_ids_criados():
+    codigo, saida = _executar(
+        ["--json", "criar", "Nova", "--conteudo", "## Contexto"], client=FakeClientComIds()
+    )
+
+    assert codigo == 0
+    assert saida["dados"]["blocos_criados"] == [{"id": "novo-1", "tipo": "heading_2"}]
+
+
+def test_criar_com_conteudo_que_falha_mantem_o_id_e_diz_que_nada_ficou():
+    """A linha existe; o corpo foi desfeito — o conselho é escrever, não recriar."""
+
+    from notion_starter import NotionHTTPError
+
+    class ClienteQueRecusaAnexar(FakeClient):
+        def anexar_blocos(self, block_id, blocos, **posicao):
+            raise NotionHTTPError(400, '{"code": "validation_error", "message": "ruim"}')
+
+    codigo, saida = _executar(
+        ["--json", "criar", "Nova", "--conteudo", "texto"], client=ClienteQueRecusaAnexar()
+    )
+
+    assert codigo == 2
+    erro = saida["erro"]
+    assert erro["codigo"] == "criacao_incompleta"
+    assert erro["detalhes"]["id"] == "novo"
+    assert erro["detalhes"]["causa"] == "escrita_parcial"
+    assert "não crie" in erro["mensagem"]
+    assert erro["proximo_passo"] == "notion-tasks escrever novo \"<markdown>\""
+
+
 def test_editar_linha_atualiza_propriedades_por_tipo():
     client = FakeClient()
     codigo, saida = _executar(

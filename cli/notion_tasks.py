@@ -655,12 +655,43 @@ def cmd_criar(
                 cliente=cliente,
             )
             dados["blocos_anexados"] = escrita.anexados
+            dados["blocos_criados"] = _blocos_criados(escrita)
     except Exception as erro:  # noqa: BLE001 - o id precisa sobreviver ao erro
-        raise CLIError(
-            f"Tarefa criada (id {page_id}), mas falhou ao completá-la: {erro}. "
-            f"Use 'editar-linha {page_id}' / 'escrever {page_id}' — não crie de novo."
-        ) from erro
+        raise _erro_ao_completar_criacao(page_id, erro) from erro
     return dados
+
+
+def _erro_ao_completar_criacao(page_id: str, erro: Exception) -> CLIError:
+    """A linha JÁ existe: o erro leva o id e o conselho certo para completá-la.
+
+    Depois de uma escrita parcial, "use 'escrever'" só é seguro quando nada do
+    corpo ficou na página; se algo pode ter ficado, é preciso conferir antes.
+    """
+
+    classificado = classificar_erro(erro)
+    motivo = str(erro) if classificado.codigo == "erro_interno" else classificado.mensagem
+    proximo = f"notion-tasks editar-linha {page_id} --set \"Coluna=valor\""
+    if isinstance(erro, svc_conteudo.EscritaParcialError):
+        if erro.criados or erro.lote_incerto:
+            conselho = (
+                f"Parte do corpo pode ter ficado na página: confira com 'blocos {page_id}' "
+                "antes de escrever de novo — não crie a linha de novo."
+            )
+            proximo = f"notion-tasks blocos {page_id}"
+        else:
+            conselho = (
+                f"O corpo não ficou na página (os blocos novos foram desfeitos): escreva-o "
+                f"com 'escrever {page_id}' — não crie a linha de novo."
+            )
+            proximo = f'notion-tasks escrever {page_id} "<markdown>"'
+    else:
+        conselho = f"Use 'editar-linha {page_id}' / 'escrever {page_id}' — não crie de novo."
+    return CLIError(
+        f"Tarefa criada (id {page_id}), mas falhou ao completá-la: {motivo} {conselho}",
+        codigo="criacao_incompleta",
+        proximo_passo=proximo,
+        detalhes={"id": page_id, "causa": classificado.codigo, **classificado.detalhes},
+    )
 
 
 def cmd_editar(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> Any:
@@ -1684,18 +1715,30 @@ def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> 
     apagar_tudo = getattr(args, "apagar_tudo", False)
     if apagar_tudo and not args.substituir:
         raise CLIError("--apagar-tudo só faz sentido junto de --substituir.")
+    apos = _id_opcional(getattr(args, "apos", None), "--apos", bloco=True)
+    inicio = getattr(args, "inicio", False) is True
+    if (apos or inicio) and args.substituir:
+        raise CLIError(
+            "--apos/--inicio não combinam com --substituir: substituir troca o corpo "
+            "inteiro e poderia apagar a própria âncora. Para inserir num ponto, rode "
+            "sem --substituir."
+        )
     resultado = svc_conteudo.escrever_conteudo(
         page_id,
         conteudo,
         substituir=args.substituir,
         apagar_nao_recriaveis=apagar_tudo,
         mesmo_com_database=getattr(args, "mesmo_com_database", False),
+        apos_bloco_id=apos,
+        inicio=inicio,
         cliente=client_factory(),
     )
     saida: dict[str, Any] = {
         "id": page_id,
         "blocos_anexados": resultado.anexados,
         "substituiu": args.substituir,
+        "posicao": _posicao_escrita(apos, inicio),
+        "blocos_criados": _blocos_criados(resultado),
     }
     if resultado.limpeza is not None:
         # Dizer o que foi mantido é o ponto: quem substituiu precisa saber que a
@@ -1709,6 +1752,20 @@ def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> 
                 "Use --apagar-tudo para apagá-los também."
             )
     return saida
+
+
+def _posicao_escrita(apos: str | None, inicio: bool) -> dict[str, str]:
+    """Onde o conteúdo novo entrou: ``fim`` (padrão), ``inicio`` ou após um bloco."""
+
+    if apos:
+        return {"tipo": "apos_bloco", "bloco_id": apos}
+    return {"tipo": "inicio" if inicio else "fim"}
+
+
+def _blocos_criados(resultado: svc_conteudo.ResultadoEscrita) -> list[dict[str, str]]:
+    """IDs dos blocos de topo criados, na ordem (filhos exigem 'blocos --recursivo')."""
+
+    return [{"id": bloco.id, "tipo": bloco.tipo} for bloco in resultado.criados]
 
 
 def _dados_limpeza(limpeza: svc_conteudo.ResultadoLimpeza) -> dict[str, Any]:
@@ -2546,6 +2603,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "blocos": ["python -m cli --json blocos <page_id>"],
     "escrever": [
         "python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'",
+        "python -m cli --json escrever <page_id> $'- item inserido' --apos <block_id>",
+        "python -m cli --json escrever <page_id> $'> Aviso no topo' --inicio",
         "python -m cli --json escrever <page_id> $'# Só isto' --substituir",
         "python -m cli --json escrever <page_id> $'# Zera mesmo' --substituir --apagar-tudo",
         "# página que contém database: trabalhe nas LINHAS, não escreva solto nela",
@@ -2740,7 +2799,9 @@ def cmd_guia(args: argparse.Namespace) -> Any:
             "Não pare no conteúdo esquecendo as propriedades: uma linha de database "
             "só fica completa quando as colunas também são preenchidas.",
             "ATENÇÃO: 'escrever' ANEXA ao final (não substitui). Repetir empilha "
-            "conteúdo. Para TROCAR o corpo, use 'escrever ... --substituir'.",
+            "conteúdo. Para TROCAR o corpo, use 'escrever ... --substituir'. Para "
+            "INSERIR num ponto, 'escrever ... --apos <block_id>' ou '--inicio' (não "
+            "use 'reordenar-bloco' para isso: ele apaga e recria).",
             "Para corrigir/reescrever uma página: veja os blocos com ID em "
             "'blocos <page_id>', então 'apagar-bloco'/'editar-bloco' por ID, ou "
             "'limpar <page_id> --sim' para zerar e reescrever do zero.",
@@ -2963,11 +3024,27 @@ def construir_parser() -> argparse.ArgumentParser:
     escrever = sub.add_parser(
         "escrever",
         help="ANEXA conteúdo (Markdown) ao final de uma página (não substitui); "
-        "use --substituir para trocar o corpo inteiro. Se for linha de database, "
-        "defina antes as propriedades com 'editar-linha'",
+        "--apos <bloco>/--inicio insere noutro ponto; --substituir troca o corpo. "
+        "Valida os limites da API antes de escrever. A saída traz 'blocos_criados' "
+        "(ID e tipo de cada bloco de TOPO; filhos como itens recuados e linhas de "
+        "tabela exigem 'blocos --recursivo'; lista vazia = a API não informou) e "
+        "'posicao'. Se for linha de database, defina antes as propriedades com "
+        "'editar-linha'",
     )
     escrever.add_argument("page_id")
     escrever.add_argument("conteudo", help="texto em Markdown a anexar")
+    posicao_escrita = escrever.add_mutually_exclusive_group()
+    posicao_escrita.add_argument(
+        "--apos",
+        metavar="BLOCO_ID",
+        help="INSERE logo depois deste bloco em vez de no fim (filho direto da página; "
+        "pegue o ID em 'blocos'; aceita link com #bloco). Conteúdo com mais de 100 "
+        "blocos sai encadeado na ordem. É o caminho para inserir — 'reordenar-bloco' "
+        "é só para mover o que já existe",
+    )
+    posicao_escrita.add_argument(
+        "--inicio", action="store_true", help="INSERE no começo da página em vez de no fim"
+    )
     escrever.add_argument(
         "--substituir",
         action="store_true",

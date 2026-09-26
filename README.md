@@ -239,6 +239,8 @@ notion-tasks conteudo <id>
 notion-tasks blocos <id>
 notion-tasks escrever <id> "<markdown>"
 notion-tasks escrever <id> "<markdown>" --substituir
+notion-tasks escrever <id> "<markdown>" --apos <block_id>   # insere depois do bloco
+notion-tasks escrever <id> "<markdown>" --inicio            # insere no começo
 notion-tasks editar-bloco <id> "<texto>"
 notion-tasks apagar-bloco <id> --sim
 notion-tasks limpar <id> --sim
@@ -306,6 +308,17 @@ diretório corrente: a pasta vem de `--dir-backup`, da variável
 `NOTION_AUTOMACOES_BACKUP_DIR` ou da pasta de estado do usuário
 (`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
 `backup_path` sai absoluto.
+
+### Escrever num ponto da página
+
+`escrever` anexa no fim por padrão; `--apos <block_id>` insere logo depois de um
+bloco (filho direto da página) e `--inicio` no começo. Conteúdo com mais de 100
+blocos sai em lotes encadeados, na ordem. A saída traz `posicao` e
+`blocos_criados` (`[{id, tipo}]`, só os blocos de topo — filhos como itens
+recuados e linhas de tabela exigem `blocos --recursivo`; lista vazia quer dizer
+que a API não informou os IDs). `criar --conteudo` também devolve
+`blocos_criados`. Para **mover** um bloco que já existe use `reordenar-bloco`;
+para inserir texto novo, nunca: ele apaga e recria.
 
 ### Limpar, substituir e desfazer
 
