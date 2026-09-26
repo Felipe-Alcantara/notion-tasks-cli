@@ -1099,6 +1099,145 @@ def test_blocos_lista_ids_para_editar_ou_apagar():
     assert saida["dados"]["blocos"][0]["preview"] == "# T"
 
 
+def _paragrafo(bloco_id, texto, **extras):
+    return {
+        "id": bloco_id,
+        "type": "paragraph",
+        "paragraph": {"rich_text": [{"plain_text": texto}]},
+        **extras,
+    }
+
+
+class FakeArvoreClient(FakeClient):
+    """Página com um item de lista que tem filho, e blocos com carimbos da API."""
+
+    ARVORE = {
+        "page1": [
+            _paragrafo(
+                "b1",
+                "Relatório " + "x" * 150,
+                created_time="2026-09-25T23:36:00.000Z",
+                last_edited_time="2026-09-25T23:40:00.000Z",
+                created_by={"object": "user", "id": "u1"},
+                last_edited_by={"object": "user", "id": "u2"},
+                has_children=False,
+                in_trash=False,
+            ),
+            {
+                "id": "b2",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"plain_text": "pai"}]},
+                "has_children": True,
+            },
+        ],
+        "b2": [
+            {
+                "id": "b3",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"plain_text": "filho com Trilha"}]},
+            }
+        ],
+    }
+
+    def ler_blocos(self, block_id, page_size=100, buscar_todos=False, recursivo=False):
+        self.chamadas.append(("ler_blocos", block_id))
+        return [dict(bloco) for bloco in self.ARVORE.get(block_id, [])]
+
+    def obter_bloco(self, block_id):
+        self.chamadas.append(("obter_bloco", block_id))
+        if block_id == "b2":
+            return {
+                **self.ARVORE["page1"][1],
+                "parent": {"type": "page_id", "page_id": "page1"},
+                "last_edited_time": "2026-09-25T23:41:00.000Z",
+            }
+        return {
+            "id": block_id,
+            "type": "child_page",
+            "child_page": {"title": "Subpágina"},
+            "has_children": True,
+            "parent": {"type": "page_id", "page_id": "page1"},
+        }
+
+
+def test_blocos_sem_flags_mantem_o_formato_de_sempre():
+    codigo, saida = _executar(["--json", "blocos", "page1"], client=FakeArvoreClient())
+    assert codigo == 0
+    assert set(saida["dados"]["blocos"][0]) == {"id", "tipo", "preview"}
+
+
+def test_blocos_metadados_traz_os_carimbos_que_a_api_ja_devolve():
+    codigo, saida = _executar(
+        ["--json", "blocos", "page1", "--metadados"], client=FakeArvoreClient()
+    )
+    assert codigo == 0
+    primeiro = saida["dados"]["blocos"][0]
+    assert primeiro["criado_em"] == "2026-09-25T23:36:00.000Z"
+    assert primeiro["editado_em"] == "2026-09-25T23:40:00.000Z"
+    assert primeiro["criado_por"] == "u1"
+    assert primeiro["editado_por"] == "u2"
+    assert primeiro["tem_filhos"] is False
+    assert primeiro["na_lixeira"] is False
+    assert saida["dados"]["blocos"][1]["tem_filhos"] is True
+
+
+def test_blocos_completo_traz_o_texto_inteiro_alem_do_preview():
+    codigo, saida = _executar(
+        ["--json", "blocos", "page1", "--completo"], client=FakeArvoreClient()
+    )
+    assert codigo == 0
+    primeiro = saida["dados"]["blocos"][0]
+    assert len(primeiro["preview"]) == 100
+    assert primeiro["markdown"] == "Relatório " + "x" * 150
+
+
+def test_blocos_recursivo_lista_os_filhos_com_nivel_e_pai():
+    codigo, saida = _executar(
+        ["--json", "blocos", "page1", "--recursivo"], client=FakeArvoreClient()
+    )
+    assert codigo == 0
+    blocos = saida["dados"]["blocos"]
+    assert [(b["id"], b["nivel"], b["pai_id"]) for b in blocos] == [
+        ("b1", 0, "page1"),
+        ("b2", 0, "page1"),
+        ("b3", 1, "b2"),
+    ]
+
+
+def test_blocos_contendo_acha_o_id_pelo_texto():
+    codigo, saida = _executar(
+        ["--json", "blocos", "page1", "--recursivo", "--contendo", "trilha"],
+        client=FakeArvoreClient(),
+    )
+    assert codigo == 0
+    assert [b["id"] for b in saida["dados"]["blocos"]] == ["b3"]
+
+
+def test_blocos_recursivo_indenta_a_saida_humana():
+    codigo, saida = _executar(["blocos", "page1", "--recursivo"], client=FakeArvoreClient())
+    assert codigo == 0
+    assert "  - filho com Trilha" in saida
+
+
+def test_ler_bloco_devolve_o_markdown_com_os_filhos_e_o_pai():
+    client = FakeArvoreClient()
+    codigo, saida = _executar(["--json", "ler-bloco", "b2"], client=client)
+    assert codigo == 0
+    dados = saida["dados"]
+    assert dados["tipo"] == "bulleted_list_item"
+    assert dados["markdown"] == "- pai\n  - filho com Trilha"
+    assert dados["pai"] == {"tipo": "page_id", "id": "page1"}
+    assert dados["editado_em"] == "2026-09-25T23:41:00.000Z"
+    assert ("obter_bloco", "b2") in client.chamadas
+
+
+def test_ler_bloco_de_subpagina_aponta_para_conteudo():
+    codigo, saida = _executar(["--json", "ler-bloco", "sub1"], client=FakeArvoreClient())
+    assert codigo == 0
+    assert saida["dados"]["tipo"] == "child_page"
+    assert "conteudo sub1" in saida["dados"]["aviso"]
+
+
 def test_escrever_substituir_limpa_antes():
     client = FakeClient()
     client.ler_blocos = lambda *a, **k: [

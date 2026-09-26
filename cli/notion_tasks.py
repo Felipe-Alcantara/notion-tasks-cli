@@ -392,7 +392,16 @@ def _formatar_humano(comando: str, dados: Any) -> str:
     if comando == "linhas":
         return "\n".join(_linhas_tabela(dados["linhas"], ("id", "titulo", "url")))
     if comando == "blocos":
-        return "\n".join(_linhas_tabela(dados["blocos"], ("id", "tipo", "preview")))
+        # Com --recursivo, o recuo do preview mostra o aninhamento.
+        registros = [
+            {**bloco, "preview": "  " * int(bloco.get("nivel") or 0) + bloco["preview"]}
+            for bloco in dados["blocos"]
+        ]
+        return "\n".join(_linhas_tabela(registros, ("id", "tipo", "preview")))
+    if comando == "ler-bloco":
+        cabecalho = f"Bloco {dados['id']} ({dados['tipo']}) — editado em {dados['editado_em']}"
+        aviso = f"\n{dados['aviso']}" if dados.get("aviso") else ""
+        return f"{cabecalho}{aviso}\n\n{dados['markdown']}"
     if comando == "clonar-database":
         return (
             f"Clone criado: {dados['titulo']} ({dados['id']})\n"
@@ -1705,8 +1714,29 @@ def cmd_editar_linha(args: argparse.Namespace, *, client_factory: ClientFactory)
 
 def cmd_blocos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _id_notion(args.page_id, "page_id")
-    blocos = svc_conteudo.listar_blocos(page_id, cliente=client_factory())
+    blocos = svc_conteudo.listar_blocos(
+        page_id,
+        metadados=getattr(args, "metadados", False) is True,
+        completo=getattr(args, "completo", False) is True,
+        recursivo=getattr(args, "recursivo", False) is True,
+        contendo=_normalizar_texto(getattr(args, "contendo", None)),
+        cliente=client_factory(),
+    )
     return {"id": page_id, "blocos": blocos}
+
+
+def cmd_ler_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Lê UM bloco pelo ID: Markdown inteiro, tipo, pai e carimbos."""
+
+    block_id = _id_notion(args.block_id, "block_id", bloco=True)
+    lido: dict[str, Any] = dict(svc_conteudo.ler_bloco(block_id, cliente=client_factory()))
+    # Subpágina e database não descem (o conteúdo deles é outra página/linhas):
+    # a borda aponta o comando que lê o que está dentro.
+    if lido["tipo"] == "child_page":
+        lido["aviso"] = f"É uma subpágina: leia o conteúdo com 'conteudo {lido['id']}'."
+    elif lido["tipo"] == "child_database":
+        lido["aviso"] = f"É um database: liste as linhas com 'linhas {lido['id']}'."
+    return lido
 
 
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -2600,7 +2630,12 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json editar-linha --arquivo atualizacoes.json "
         "--progresso-a-cada 25",
     ],
-    "blocos": ["python -m cli --json blocos <page_id>"],
+    "blocos": [
+        "python -m cli --json blocos <page_id>",
+        "python -m cli --json blocos <page_id> --metadados --completo",
+        'python -m cli --json blocos <page_id> --recursivo --contendo "trecho lido"',
+    ],
+    "ler-bloco": ["python -m cli --json ler-bloco <block_id>"],
     "escrever": [
         "python -m cli --json escrever <page_id> $'# Título\\n\\nTexto'",
         "python -m cli --json escrever <page_id> $'- item inserido' --apos <block_id>",
@@ -3017,9 +3052,46 @@ def construir_parser() -> argparse.ArgumentParser:
     blocos = sub.add_parser(
         "blocos",
         help="lista os blocos de topo de uma página COM o ID de cada um — use "
-        "antes de 'editar-bloco'/'apagar-bloco', que precisam do block_id",
+        "antes de 'editar-bloco'/'apagar-bloco', que precisam do block_id. Sem "
+        "flags, só {id, tipo, preview}",
     )
     blocos.add_argument("page_id")
+    blocos.add_argument(
+        "--metadados",
+        action="store_true",
+        help="acrescenta tem_filhos, criado_em, editado_em, criado_por, editado_por "
+        "(IDs de usuário) e na_lixeira — já vêm na mesma resposta, sem chamada extra. "
+        "Observado no workspace real: os horários chegam arredondados ao minuto (a "
+        "documentação não fala em precisão) — para a ordem, use a posição na lista",
+    )
+    blocos.add_argument(
+        "--completo",
+        action="store_true",
+        help="acrescenta 'markdown' com o texto INTEIRO de cada bloco (o preview é "
+        "cortado em 100 caracteres)",
+    )
+    blocos.add_argument(
+        "--recursivo",
+        action="store_true",
+        help="desce nos blocos com filhos (itens recuados, toggles, colunas) e lista "
+        "os descendentes logo depois do pai, com 'nivel' (0 = topo) e 'pai_id'. Um "
+        "GET por bloco com filhos, em sequência; nunca entra em subpágina nem database",
+    )
+    blocos.add_argument(
+        "--contendo",
+        metavar="TRECHO",
+        help="só os blocos cujo texto contém o trecho (sem diferenciar maiúsculas) — "
+        "para achar o ID de um bloco pelo que se leu em 'conteudo'",
+    )
+
+    ler_bloco = sub.add_parser(
+        "ler-bloco",
+        help="lê UM bloco pelo ID (aceita link com #bloco): Markdown inteiro (com os "
+        "filhos, exceto de subpágina/database), tipo, pai {tipo, id}, tem_filhos, "
+        "carimbos e na_lixeira. Use para conferir um bloco antes de 'editar-bloco' "
+        "ou quando só se tem o ID de um bloco aninhado",
+    )
+    ler_bloco.add_argument("block_id")
 
     escrever = sub.add_parser(
         "escrever",
@@ -3640,6 +3712,8 @@ def _despachar(
         dados = cmd_linhas(args, client_factory=client_factory)
     elif comando == "blocos":
         dados = cmd_blocos(args, client_factory=client_factory)
+    elif comando == "ler-bloco":
+        dados = cmd_ler_bloco(args, client_factory=client_factory)
     elif comando == "editar-linha":
         dados = cmd_editar_linha(args, client_factory=client_factory)
     elif comando == "escrever":

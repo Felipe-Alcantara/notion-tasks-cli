@@ -237,6 +237,9 @@ notion-tasks relacionar --coluna "Subtarefas relacionadas" --arquivo pares.json
 # Conteúdo de páginas
 notion-tasks conteudo <id>
 notion-tasks blocos <id>
+notion-tasks blocos <id> --metadados --completo      # carimbos e texto inteiro
+notion-tasks blocos <id> --recursivo --contendo "x"  # acha o ID de um bloco aninhado
+notion-tasks ler-bloco <block_id>                    # UM bloco: Markdown, pai, carimbos
 notion-tasks escrever <id> "<markdown>"
 notion-tasks escrever <id> "<markdown>" --substituir
 notion-tasks escrever <id> "<markdown>" --apos <block_id>   # insere depois do bloco
@@ -308,6 +311,18 @@ diretório corrente: a pasta vem de `--dir-backup`, da variável
 `NOTION_AUTOMACOES_BACKUP_DIR` ou da pasta de estado do usuário
 (`~/.local/state/notion-automacoes/backups`; `%LOCALAPPDATA%` no Windows), e
 `backup_path` sai absoluto.
+
+### Ler blocos
+
+`blocos <page_id>` lista os blocos de topo com `{id, tipo, preview}` (o preview
+corta em 100 caracteres). `--metadados` acrescenta `tem_filhos`, `criado_em`,
+`editado_em`, `criado_por`, `editado_por` e `na_lixeira`, que já vêm na mesma
+resposta da API (observado: os horários chegam arredondados ao minuto — para a
+ordem, use a posição na lista). `--completo` acrescenta o `markdown` inteiro;
+`--recursivo` desce nos filhos (um GET por bloco com filhos, nunca em subpágina
+ou database) com `nivel` e `pai_id`; `--contendo "<trecho>"` filtra pelo texto.
+`ler-bloco <block_id>` lê um bloco só — Markdown com os filhos, `pai`, carimbos —
+e aponta `conteudo`/`linhas` quando o bloco é subpágina ou database.
 
 ### Escrever num ponto da página
 
