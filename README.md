@@ -333,6 +333,13 @@ Informar o texto e `--arquivo-md` juntos é recusado; `-` sem nada redirecionado
 dá erro em vez de ficar esperando o teclado. Antes desta mudança, `escrever <id> -`
 gravava um `-` literal.
 
+O texto chega à biblioteca como veio: a CLI não corta espaços nas pontas, porque
+o recuo da primeira linha é conteúdo. Num bloco de código, `editar-bloco` grava
+`    return valor` com os quatro espaços; numa lista recuada por igual
+(`  - a` / `  - b`), os itens continuam irmãos. Só texto inteiro em branco conta
+como ausente, e as quebras de linha `\r\n` do stdin viram `\n`, como já acontecia
+com `--arquivo-md`.
+
 ### Ler blocos
 
 `blocos <page_id>` lista os blocos de topo com `{id, tipo, preview}` (o preview

@@ -972,6 +972,51 @@ def test_criar_e_criar_subpagina_aceitam_conteudo_do_stdin(monkeypatch):
     assert blocos_enviados[0][0]["type"] == "heading_1"
 
 
+def _estrutura_anexada(client) -> list[tuple[str, int]]:
+    """(tipo, quantidade de filhos) de cada bloco de topo enviado ao Notion."""
+
+    anexados = [c[1][1] for c in client.chamadas if c[0] == "anexar_blocos"]
+    return [
+        (bloco["type"], len(bloco[bloco["type"]].get("children") or []))
+        for lote in anexados
+        for bloco in lote
+    ]
+
+
+def test_escrever_lista_recuada_por_igual_nao_vira_lista_aninhada(monkeypatch):
+    """O strip() do texto inteiro tirava o recuo só da PRIMEIRA linha: dois itens
+    irmãos ('  - a' e '  - b') viravam 'b' filho de 'a'."""
+
+    _stdin(monkeypatch, "  - a\n  - b\n")
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "escrever", "page1", "-"], client=client)
+
+    assert codigo == 0, saida
+    assert _estrutura_anexada(client) == [("bulleted_list_item", 0), ("bulleted_list_item", 0)]
+
+
+def test_criar_conteudo_recuado_por_igual_mantem_os_itens_irmaos(tmp_path):
+    nota = tmp_path / "nota.md"
+    nota.write_text("  - a\n  - b\n", encoding="utf-8")
+    client = FakeClient()
+    codigo, saida = _executar(
+        ["--json", "criar", "Nova", "--arquivo-md", str(nota)], client=client
+    )
+
+    assert codigo == 0, saida
+    assert _estrutura_anexada(client) == [("bulleted_list_item", 0), ("bulleted_list_item", 0)]
+
+
+def test_escrever_so_com_espacos_continua_obrigatorio(monkeypatch):
+    _stdin(monkeypatch, " \n\n")
+    client = FakeClient()
+    codigo, saida = _executar(["--json", "escrever", "page1", "-"], client=client)
+
+    assert codigo == 2
+    assert "obrigatório" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
+
+
 def test_editar_linha_atualiza_propriedades_por_tipo():
     client = FakeClient()
     codigo, saida = _executar(
@@ -1257,6 +1302,61 @@ def test_editar_bloco_de_codigo_aceita_varias_linhas():
     assert codigo == 0
     enviado = client.patches()[0]["code"]["rich_text"]
     assert "".join(item["text"]["content"] for item in enviado) == "def f():\n    return 1"
+
+
+def _codigo_enviado(client) -> str:
+    enviado = client.patches()[0]["code"]["rich_text"]
+    return "".join(item["text"]["content"] for item in enviado)
+
+
+def _bloco_de_codigo() -> dict:
+    return {"type": "code", "code": {"rich_text": [_texto("x")], "language": "python"}}
+
+
+def test_editar_bloco_de_codigo_preserva_o_recuo_vindo_do_stdin(monkeypatch):
+    """A borda fazia strip() do texto inteiro: o corpo de um método perdia o recuo
+    da primeira linha e a resposta ainda dizia editado=true."""
+
+    _stdin(monkeypatch, "    return valor\n\nfim\n")
+    client = FakeEdicaoClient(_bloco_de_codigo())
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "-"], client=client)
+
+    assert codigo == 0, saida
+    assert _codigo_enviado(client) == "    return valor\n\nfim"
+
+
+def test_editar_bloco_de_codigo_preserva_o_recuo_vindo_do_arquivo_md(tmp_path):
+    arquivo = tmp_path / "trecho.py"
+    arquivo.write_text("    indentado primeiro\nsegunda\n", encoding="utf-8")
+    client = FakeEdicaoClient(_bloco_de_codigo())
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "--arquivo-md", str(arquivo)], client=client
+    )
+
+    assert codigo == 0, saida
+    assert _codigo_enviado(client) == "    indentado primeiro\nsegunda"
+
+
+def test_editar_bloco_de_codigo_do_stdin_com_crlf_nao_grava_retorno_de_carro(monkeypatch):
+    """O stdin é lido em bytes; sem normalizar, o CRLF do Windows deixava '\\r' no código
+    (o arquivo, lido em modo texto, já chegava com '\\n')."""
+
+    _stdin(monkeypatch, "    x = 1\r\ny = 2\r\n")
+    client = FakeEdicaoClient(_bloco_de_codigo())
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "-"], client=client)
+
+    assert codigo == 0, saida
+    assert _codigo_enviado(client) == "    x = 1\ny = 2"
+
+
+def test_editar_bloco_so_com_espacos_continua_pedindo_conteudo(monkeypatch):
+    _stdin(monkeypatch, "  \n\t\n")
+    client = FakeEdicaoClient(_bloco_de_codigo())
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "-"], client=client)
+
+    assert codigo == 2
+    assert "Informe o conteúdo novo" in saida["erro"]["mensagem"]
+    assert client.chamadas == []
 
 
 def test_editar_bloco_texto_puro_mantem_o_tipo_atual():

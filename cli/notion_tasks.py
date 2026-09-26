@@ -143,17 +143,34 @@ def _id_opcional(valor: str | None, campo: str, *, bloco: bool = False) -> str |
 def _markdown_da_entrada(
     valor: str | None, arquivo_md: str | None, *, campo: str
 ) -> str | None:
-    """Markdown do argumento, do stdin (``-``) ou de ``--arquivo-md``.
+    """Markdown do argumento, do stdin (``-``) ou de ``--arquivo-md``, sem retoque.
 
     Passar Markdown no argv esbarra no limite de 128 KiB por argumento do
     Linux (e de ~32 mil caracteres no Windows) e na citação do shell; o stdin
     e o arquivo não. É leitura de E/S de borda: o serviço continua recebendo
     ``str``. Lê em UTF-8 (com BOM tolerado) independentemente do console.
 
+    O texto segue para o serviço como veio, sem ``strip()``: o recuo da
+    primeira linha é conteúdo (o código de um bloco de código, o nível de uma
+    lista recuada por igual), e cortá-lo mudava o que era gravado. A
+    biblioteca já ignora as linhas em branco e os espaços nas pontas de uma
+    linha de Markdown. Só texto inteiro em branco conta como ausente
+    (``None``). As quebras de linha chegam como ``\\n`` nas três fontes, como
+    na leitura do arquivo em modo texto.
+
     Raises:
         CLIError: As duas fontes juntas, ``-`` sem nada redirecionado (em vez
             de ficar esperando o teclado) ou arquivo ilegível.
     """
+
+    bruto = _ler_markdown(valor, arquivo_md, campo=campo)
+    if bruto is None or not bruto.strip():
+        return None
+    return bruto.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _ler_markdown(valor: str | None, arquivo_md: str | None, *, campo: str) -> str | None:
+    """Lê a fonte escolhida em :func:`_markdown_da_entrada`, sem normalizar."""
 
     texto = _normalizar_texto(valor)
     caminho = _normalizar_texto(arquivo_md)
@@ -687,10 +704,8 @@ def cmd_criar(
             )
 
     extras = _pares_chave_valor(getattr(args, "set", None), "--set")
-    conteudo = _normalizar_texto(
-        _markdown_da_entrada(
-            getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="--conteudo"
-        )
+    conteudo = _markdown_da_entrada(
+        getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="--conteudo"
     )
     cliente: NotionClient | None = None
     preflight: svc_preflight.ResultadoPreflight | None = None
@@ -1837,10 +1852,11 @@ def cmd_ler_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) ->
 
 def cmd_escrever(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
     page_id = _id_notion(args.page_id, "page_id")
-    conteudo = _texto_obrigatorio(
-        _markdown_da_entrada(args.conteudo, _argumento_arquivo_md(args), campo="conteudo"),
-        "conteudo (texto, '-' para o stdin ou --arquivo-md)",
-    )
+    conteudo = _markdown_da_entrada(args.conteudo, _argumento_arquivo_md(args), campo="conteudo")
+    if conteudo is None:
+        raise CLIError(
+            "O campo 'conteudo (texto, '-' para o stdin ou --arquivo-md)' é obrigatório."
+        )
     apagar_tudo = getattr(args, "apagar_tudo", False)
     if apagar_tudo and not args.substituir:
         raise CLIError("--apagar-tudo só faz sentido junto de --substituir.")
@@ -1985,10 +2001,9 @@ def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory)
     por = getattr(args, "por", None)
     todas = getattr(args, "todas", False) is True
     aceitar_perda = getattr(args, "aceitar_perda_de_formatacao", False) is True
-    conteudo = _normalizar_texto(
-        _markdown_da_entrada(
-            getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="conteudo"
-        )
+    # Sem strip: num bloco de código o texto inteiro é o código, recuo incluído.
+    conteudo = _markdown_da_entrada(
+        getattr(args, "conteudo", None), _argumento_arquivo_md(args), campo="conteudo"
     )
     arquivo = _argumento_arquivo_lote(args)
     if arquivo:
@@ -2685,10 +2700,7 @@ def cmd_relatorio_do_dia(args: argparse.Namespace, *, client_factory: ClientFact
     database_id = _id_notion(args.database, "--database")
     data = _normalizar_texto(args.data) or date.today().isoformat()
     corpo = (
-        _normalizar_texto(
-            _markdown_da_entrada(args.corpo, _argumento_arquivo_md(args), campo="--corpo")
-        )
-        or ""
+        _markdown_da_entrada(args.corpo, _argumento_arquivo_md(args), campo="--corpo") or ""
     )
 
     if not corpo and not args.permitir_corpo_vazio:
@@ -2757,8 +2769,8 @@ def cmd_criar_subpagina(args: argparse.Namespace, *, client_factory: ClientFacto
     criada = svc_estrutura.criar_subpagina(
         pagina_pai_id,
         titulo,
-        markdown=_normalizar_texto(
-            _markdown_da_entrada(args.conteudo, _argumento_arquivo_md(args), campo="--conteudo")
+        markdown=_markdown_da_entrada(
+            args.conteudo, _argumento_arquivo_md(args), campo="--conteudo"
         ),
         cliente=client_factory(),
     )
@@ -3663,7 +3675,8 @@ def construir_parser() -> argparse.ArgumentParser:
         "conteudo",
         nargs="?",
         help="o novo texto do bloco: UMA linha de Markdown (várias linhas são "
-        "recusadas; num bloco de código, o texto inteiro é o código); '-' lê do stdin",
+        "recusadas; num bloco de código, o texto inteiro é o código, com o recuo da "
+        "primeira linha preservado); '-' lê do stdin",
     )
     editar_bloco.add_argument(
         "--arquivo-md",

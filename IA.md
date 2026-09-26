@@ -826,3 +826,43 @@ um `TaskList.obter` na biblioteca); `--dry-run` do `editar-bloco` exigiria uma
 função de planejamento pura na biblioteca. A faixa `notion-starter>=0.3.0,<0.4.0`
 do `pyproject.toml` precisa acompanhar a próxima versão publicada do
 `notion-starter`, que é a que contém as APIs usadas aqui.
+
+## [2026-09-25] Revisão da borda: recuo do Markdown e dependência do starter
+
+Registro gravado em 2026-09-26 às 03:13 (-03), durante a correção dos
+bloqueantes que a revisão apontou no registro anterior. Nada foi publicado: os
+commits são locais.
+
+### `editar-bloco` apagava o recuo do código
+
+**O que estava errado (reproduzido na API real, numa subpágina-sandbox).**
+`printf '    return valor\n\nfim\n' | notion-tasks --json editar-bloco <code> -`
+respondia `ok: true`, mas o `GET /blocks/<id>` mostrava `return valor\n\nfim`,
+sem os quatro espaços. O mesmo com `--arquivo-md`. A causa estava só na borda:
+`cmd_editar_bloco` fazia `_normalizar_texto(...)`, um `strip()` do texto inteiro,
+e a biblioteca já preservava o recuo. O mesmo `strip()` estava em `escrever`,
+`criar --conteudo`, `criar-subpagina --conteudo` e `relatorio-do-dia --corpo`,
+onde mudava a estrutura: `  - a` / `  - b` (dois itens irmãos) virava `b`
+filho de `a`, porque só a primeira linha perdia o recuo.
+
+**Decisão.** `_markdown_da_entrada` passou a devolver o texto como veio. Só o
+que é inteiro espaço em branco conta como ausente, e `\r\n` vira `\n` nas três
+fontes (o stdin é lido em bytes e, sem isso, o CRLF do Windows deixava `\r` no
+código; o arquivo já era lido em modo texto). As cinco chamadas deixaram de
+cortar as pontas. Para uma linha de Markdown, espaço nas pontas não muda o
+bloco gerado (conferido no conversor da biblioteca), então o resto do
+comportamento fica igual.
+
+**Achado da validação.** Com o código já gravado certo, a saída ainda mostrava
+o código sem o recuo: o leitor da biblioteca (`blocos_para_markdown`) também
+fazia `strip()`. A correção foi no `notion-starter` (commit `69dfe76` daquele
+repositório); `ler-bloco` e a saída de `editar-bloco` passaram a mostrar o que
+o `GET` devolve.
+
+**Validação.** Cinco testes novos falham com a borda anterior e passam agora:
+stdin e `--arquivo-md` num bloco de código (conferindo o `rich_text` do PATCH),
+CRLF no stdin, lista recuada por igual em `escrever` (stdin) e em `criar`
+(`--arquivo-md`). Dois testes guardam que texto só com espaços continua sendo
+recusado. Na API real, na sandbox: stdin, `--arquivo-md` e CRLF gravaram o
+código com o recuo e sem `\r` (conferido por `GET`), e `escrever` com
+`  - a` / `  - b` criou dois itens de topo sem filhos.

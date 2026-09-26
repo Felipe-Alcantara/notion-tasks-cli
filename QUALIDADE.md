@@ -84,6 +84,13 @@ lista. Os testes que reordenam blocos isolam a pasta de backup com
 `NOTION_AUTOMACOES_BACKUP_DIR` (fixture `backups_isolados`), para a suíte nunca
 gravar na pasta de estado real do usuário.
 
+O Markdown recebido (argumento, stdin `-` ou `--arquivo-md`) passa por
+`_markdown_da_entrada` e chega à biblioteca sem `strip()`: o recuo da primeira
+linha é conteúdo (o código de um bloco `code`, o nível de uma lista recuada por
+igual). A borda só decide se o texto está vazio e troca `\r\n` por `\n`. Os
+testes de `editar-bloco` conferem o `rich_text` enviado no PATCH, não só o
+código de saída.
+
 Todo argumento de ID passa por `_id_notion` (regra `normalizar_id` da
 biblioteca); texto que não é UUID nem link segue para a API, o que mantém os
 doubles de teste com IDs curtos.
