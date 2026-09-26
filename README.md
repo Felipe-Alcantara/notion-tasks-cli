@@ -245,6 +245,7 @@ notion-tasks escrever <id> "<markdown>" --substituir
 notion-tasks escrever <id> "<markdown>" --apos <block_id>   # insere depois do bloco
 notion-tasks escrever <id> "<markdown>" --inicio            # insere no começo
 notion-tasks editar-bloco <id> "<texto>"
+notion-tasks editar-bloco <id> --trocar "20:12" --por "20:15"   # só o trecho
 notion-tasks apagar-bloco <id> --sim
 notion-tasks limpar <id> --sim
 notion-tasks restaurar-bloco <block_id> [<block_id> ...]
@@ -334,6 +335,20 @@ recuados e linhas de tabela exigem `blocos --recursivo`; lista vazia quer dizer
 que a API não informou os IDs). `criar --conteudo` também devolve
 `blocos_criados`. Para **mover** um bloco que já existe use `reordenar-bloco`;
 para inserir texto novo, nunca: ele apaga e recria.
+
+### Editar um bloco
+
+`editar-bloco <block_id> "<texto>"` troca o texto de **um** bloco. Ele lê o bloco
+antes: texto sem prefixo mantém o tipo atual (um heading, callout ou to-do continua
+o que era), prefixo de outro tipo é recusado (a API não troca o tipo de um bloco),
+e Markdown de várias linhas é recusado sem gravar nada — antes só a primeira linha
+era gravada e a resposta dizia `editado: true`. Para inserir o resto, use
+`escrever <pagina_id> "..." --apos <block_id>`. Num bloco de código, o texto
+inteiro é o código. Se o bloco tem menção, equação, sublinhado ou cor, a
+reescrita é recusada com a lista do que se perderia; `--trocar "<antigo>" --por
+"<novo>"` (`--todas` para todas as ocorrências) muda só o trecho e mantém o resto,
+e `--aceitar-perda-de-formatacao` reescreve mesmo assim. A saída confirma `tipo`,
+`markdown` e `editado_em` a partir da resposta da API.
 
 ### Limpar, substituir e desfazer
 

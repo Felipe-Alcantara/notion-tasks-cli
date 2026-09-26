@@ -1062,12 +1062,180 @@ def test_editar_linha_lote_aceita_csv_com_append(tmp_path: Path):
     assert enviados[0]["Nome"]["title"][0]["text"]["content"] == "nota nova"
 
 
-def test_editar_bloco_atualiza():
-    client = FakeClient()
-    codigo, saida = _executar(["--json", "editar-bloco", "b1", "## Novo"], client=client)
+def _texto(conteudo, **anotacoes):
+    return {
+        "type": "text",
+        "text": {"content": conteudo, "link": None},
+        "plain_text": conteudo,
+        "annotations": {
+            "bold": False,
+            "italic": False,
+            "strikethrough": False,
+            "underline": False,
+            "code": False,
+            "color": "default",
+            **anotacoes,
+        },
+    }
+
+
+class FakeEdicaoClient(FakeClient):
+    """Bloco atual lido por GET e resposta do PATCH como a API devolve."""
+
+    def __init__(self, atual: dict) -> None:
+        super().__init__()
+        self.atual = {"id": "b1", **atual}
+
+    def obter_bloco(self, block_id):
+        self.chamadas.append(("obter_bloco", block_id))
+        return self.atual
+
+    def atualizar_bloco(self, block_id, conteudo):
+        self.chamadas.append(("atualizar_bloco", (block_id, conteudo)))
+        tipo = next(iter(conteudo))
+        return {
+            "id": block_id,
+            "type": tipo,
+            tipo: {**self.atual.get(tipo, {}), **conteudo[tipo]},
+            "last_edited_time": "2026-09-25T23:50:00.000Z",
+        }
+
+    def patches(self):
+        return [c[1][1] for c in self.chamadas if c[0] == "atualizar_bloco"]
+
+
+def _heading(*itens):
+    return {"type": "heading_3", "heading_3": {"rich_text": list(itens), "color": "default"}}
+
+
+def test_editar_bloco_atualiza_e_confirma_o_que_gravou():
+    client = FakeEdicaoClient({"type": "paragraph", "paragraph": {"rich_text": [_texto("a")]}})
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "novo **texto**"], client=client)
     assert codigo == 0
-    assert saida["dados"]["editado"] is True
-    assert any(c[0] == "atualizar_bloco" for c in client.chamadas)
+    dados = saida["dados"]
+    assert dados["editado"] is True
+    assert dados["tipo"] == "paragraph"
+    assert dados["markdown"] == "novo **texto**"
+    assert dados["editado_em"] == "2026-09-25T23:50:00.000Z"
+
+
+def test_editar_bloco_com_varias_linhas_recusa_sem_gravar_nada():
+    """Antes gravava só a primeira linha e respondia editado=true."""
+
+    client = FakeEdicaoClient({"type": "paragraph", "paragraph": {"rich_text": [_texto("a")]}})
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "linha 1\n\nlinha 2 importante"], client=client
+    )
+    assert codigo == 2
+    erro = saida["erro"]
+    assert erro["codigo"] == "edicao_multibloco"
+    assert erro["detalhes"]["quantidade"] == 2
+    # A dica cita comandos que existem na CLI, não a API Python.
+    assert "--apos b1" in erro["mensagem"]
+    assert client.patches() == []
+
+
+def test_editar_bloco_de_codigo_aceita_varias_linhas():
+    client = FakeEdicaoClient({"type": "code", "code": {"rich_text": [_texto("x")]}})
+    codigo, _ = _executar(
+        ["--json", "editar-bloco", "b1", "def f():\n    return 1"], client=client
+    )
+    assert codigo == 0
+    enviado = client.patches()[0]["code"]["rich_text"]
+    assert "".join(item["text"]["content"] for item in enviado) == "def f():\n    return 1"
+
+
+def test_editar_bloco_texto_puro_mantem_o_tipo_atual():
+    """Texto sem prefixo num heading virava paragraph e a API respondia 400."""
+
+    client = FakeEdicaoClient(_heading(_texto("[20:12] Agente")))
+    codigo, _ = _executar(["--json", "editar-bloco", "b1", "[20:15] Agente X"], client=client)
+    assert codigo == 0
+    assert list(client.patches()[0]) == ["heading_3"]
+
+
+def test_editar_bloco_prefixo_de_outro_tipo_e_recusado():
+    client = FakeEdicaoClient(_heading(_texto("t")))
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "# Outro"], client=client)
+    assert codigo == 2
+    assert saida["erro"]["codigo"] == "troca_de_tipo"
+    assert client.patches() == []
+
+
+def test_editar_bloco_recusa_perder_sublinhado_e_cor_e_ensina_o_trocar():
+    client = FakeEdicaoClient(_heading(_texto("[20:12] ", underline=True, color="red")))
+    codigo, saida = _executar(["--json", "editar-bloco", "b1", "[20:15]"], client=client)
+    assert codigo == 2
+    erro = saida["erro"]
+    assert erro["codigo"] == "perda_de_formatacao"
+    assert "--trocar" in erro["mensagem"]
+    assert "--aceitar-perda-de-formatacao" in erro["mensagem"]
+    assert client.patches() == []
+
+    codigo, _ = _executar(
+        ["--json", "editar-bloco", "b1", "[20:15]", "--aceitar-perda-de-formatacao"],
+        client=client,
+    )
+    assert codigo == 0
+    assert len(client.patches()) == 1
+
+
+def test_editar_bloco_trocar_preserva_formatacao_e_mencao():
+    mencao = {
+        "type": "mention",
+        "mention": {"type": "page", "page": {"id": "pg-x"}},
+        "plain_text": "Página X",
+        "href": "https://www.notion.so/pgx",
+        "annotations": _texto("")["annotations"],
+    }
+    client = FakeEdicaoClient(
+        _heading(_texto("[20:12] ", underline=True, color="red"), mencao, _texto(" fim", bold=True))
+    )
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "--trocar", "20:12", "--por", "20:15"], client=client
+    )
+
+    assert codigo == 0
+    enviado = client.patches()[0]["heading_3"]["rich_text"]
+    assert enviado[0]["text"]["content"] == "[20:15] "
+    assert enviado[0]["annotations"]["underline"] is True
+    assert enviado[0]["annotations"]["color"] == "red"
+    assert enviado[1]["type"] == "mention"
+    assert enviado[1]["mention"]["page"]["id"] == "pg-x"
+    assert enviado[2]["annotations"]["bold"] is True
+    assert saida["dados"]["ocorrencias"] == 1
+    assert saida["dados"]["tipo"] == "heading_3"
+
+
+def test_editar_bloco_trocar_ambiguo_sugere_todas():
+    client = FakeEdicaoClient(_heading(_texto("a e a")))
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "--trocar", "a", "--por", "b"], client=client
+    )
+    assert codigo == 2
+    assert saida["erro"]["codigo"] == "trecho_ambiguo"
+    assert "--todas" in saida["erro"]["mensagem"]
+
+    codigo, saida = _executar(
+        ["--json", "editar-bloco", "b1", "--trocar", "a", "--por", "b", "--todas"],
+        client=client,
+    )
+    assert codigo == 0
+    assert saida["dados"]["ocorrencias"] == 2
+
+
+def test_editar_bloco_combinacoes_invalidas_sao_recusadas_antes_da_api():
+    for argumentos in (
+        ["editar-bloco", "b1", "texto", "--trocar", "a", "--por", "b"],
+        ["editar-bloco", "b1", "--trocar", "a"],
+        ["editar-bloco", "b1", "--por", "b"],
+        ["editar-bloco", "b1", "texto", "--todas"],
+        ["editar-bloco", "b1"],
+    ):
+        client = FakeEdicaoClient(_heading(_texto("a")))
+        codigo, saida = _executar(["--json", *argumentos], client=client)
+        assert codigo == 2, argumentos
+        assert client.chamadas == [], argumentos
 
 
 def test_apagar_bloco_sem_sim_nao_apaga():

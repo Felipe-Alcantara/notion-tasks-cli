@@ -27,11 +27,18 @@ from notion_starter import (  # noqa: E402
     NotionClient,
     NotionHTTPError,  # noqa: E402, F401 - exposto como cli.NotionHTTPError
     TaskList,
+    blocos_para_markdown,
     construir_inventario,
 )
 from notion_starter import properties as starter_properties  # noqa: E402
 from notion_starter import schema as starter_schema  # noqa: E402
-from notion_starter.exceptions import IdNotionInvalidoError  # noqa: E402
+from notion_starter.exceptions import (  # noqa: E402
+    EdicaoMultiblocoError,
+    EscritaParcialError,
+    IdNotionInvalidoError,
+    PerdaDeFormatacaoError,
+    TrechoAmbiguoError,
+)
 from notion_starter.services import anexos as svc_anexos  # noqa: E402
 from notion_starter.services import (  # noqa: E402
     historico_repositorios as svc_historico,
@@ -680,7 +687,7 @@ def _erro_ao_completar_criacao(page_id: str, erro: Exception) -> CLIError:
     classificado = classificar_erro(erro)
     motivo = str(erro) if classificado.codigo == "erro_interno" else classificado.mensagem
     proximo = f"notion-tasks editar-linha {page_id} --set \"Coluna=valor\""
-    if isinstance(erro, svc_conteudo.EscritaParcialError):
+    if isinstance(erro, EscritaParcialError):
         if erro.criados or erro.lote_incerto:
             conselho = (
                 f"Parte do corpo pode ter ficado na página: confira com 'blocos {page_id}' "
@@ -1875,10 +1882,140 @@ def cmd_restaurar_bloco(args: argparse.Namespace, *, client_factory: ClientFacto
 
 
 def cmd_editar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Edita UM bloco: reescreve por Markdown ou troca um trecho (``--trocar``).
+
+    A reescrita sempre confere o bloco atual (``conferir_atual``): texto sem
+    prefixo mantém o tipo (um heading continua heading), prefixo de outro tipo
+    e várias linhas são recusados, e o que o Markdown não representa (menção,
+    sublinhado, cor…) só é descartado com ``--aceitar-perda-de-formatacao``.
+    """
+
     block_id = _id_notion(args.block_id, "block_id", bloco=True)
-    conteudo = _texto_obrigatorio(args.conteudo, "conteudo")
-    svc_conteudo.editar_bloco(block_id, conteudo, cliente=client_factory())
-    return {"id": block_id, "editado": True}
+    trocar = getattr(args, "trocar", None)
+    por = getattr(args, "por", None)
+    todas = getattr(args, "todas", False) is True
+    aceitar_perda = getattr(args, "aceitar_perda_de_formatacao", False) is True
+    conteudo = _normalizar_texto(getattr(args, "conteudo", None))
+    _validar_modo_edicao(conteudo, trocar, por, todas=todas, aceitar_perda=aceitar_perda)
+    cliente = client_factory()
+    if trocar is not None:
+        return _trocar_trecho(block_id, trocar, por or "", todas=todas, cliente=cliente)
+    return _editar_por_markdown(
+        block_id, conteudo or "", aceitar_perda=aceitar_perda, cliente=cliente
+    )
+
+
+def _validar_modo_edicao(
+    conteudo: str | None,
+    trocar: str | None,
+    por: str | None,
+    *,
+    todas: bool,
+    aceitar_perda: bool,
+) -> None:
+    """Recusa, antes de qualquer chamada, combinações de flags sem sentido."""
+
+    if trocar is not None:
+        if conteudo is not None:
+            raise CLIError(
+                "Use o conteúdo novo OU --trocar/--por, não os dois: --trocar muda só um "
+                "trecho e mantém o resto do bloco."
+            )
+        if por is None:
+            raise CLIError('--trocar exige --por "<texto novo>" (use --por "" para apagar).')
+        if not trocar:
+            raise CLIError("--trocar não pode ser vazio.")
+        if aceitar_perda:
+            raise CLIError(
+                "--aceitar-perda-de-formatacao não se aplica a --trocar: a troca de "
+                "trecho já preserva a formatação."
+            )
+        return
+    if por is not None or todas:
+        raise CLIError("--por e --todas só valem junto de --trocar.")
+    if conteudo is None:
+        raise CLIError(
+            "Informe o conteúdo novo do bloco (uma linha de Markdown) ou use "
+            '--trocar "<trecho>" --por "<novo>".'
+        )
+
+
+def _editar_por_markdown(
+    block_id: str, conteudo: str, *, aceitar_perda: bool, cliente: NotionClient
+) -> dict[str, Any]:
+    try:
+        resposta = svc_conteudo.editar_bloco(
+            block_id,
+            conteudo,
+            conferir_atual=True,
+            aceitar_perda_de_formatacao=aceitar_perda,
+            cliente=cliente,
+        )
+    except EdicaoMultiblocoError as erro:
+        raise CLIError(
+            f"editar-bloco edita UM bloco, mas o Markdown gerou {erro.quantidade} blocos; "
+            "nada foi alterado. Mande uma linha só; para o resto, edite este bloco com a "
+            "primeira linha e insira as demais logo depois dele com "
+            f"'escrever <pagina_id> \"<markdown>\" --apos {block_id}'.",
+            codigo="edicao_multibloco",
+            proximo_passo=f'notion-tasks escrever <pagina_id> "<markdown>" --apos {block_id}',
+            detalhes={"quantidade": erro.quantidade},
+        ) from erro
+    except PerdaDeFormatacaoError as erro:
+        raise CLIError(
+            f"Reescrever o bloco {block_id} por Markdown perderia: "
+            f"{'; '.join(erro.perdas)}. Nada foi alterado. Para mudar só um trecho "
+            f"mantendo o resto: 'editar-bloco {block_id} --trocar \"<antigo>\" --por "
+            "\"<novo>\"'; para reescrever mesmo assim, repita com "
+            "--aceitar-perda-de-formatacao.",
+            codigo="perda_de_formatacao",
+            proximo_passo=(
+                f'notion-tasks editar-bloco {block_id} --trocar "<antigo>" --por "<novo>"'
+            ),
+            detalhes={"perdas": list(erro.perdas)},
+        ) from erro
+    return _resumo_bloco_editado(block_id, resposta)
+
+
+def _resumo_bloco_editado(block_id: str, resposta: Any) -> dict[str, Any]:
+    """Confirma o que foi gravado a partir da resposta do PATCH (sem outra chamada).
+
+    ``editado_em`` vem arredondado ao minuto (observado); a confirmação de
+    verdade é o ``markdown`` devolvido.
+    """
+
+    lido = resposta if isinstance(resposta, dict) and resposta.get("type") else {}
+    return {
+        "id": block_id,
+        "editado": True,
+        "tipo": str(lido.get("type") or ""),
+        "markdown": blocos_para_markdown([lido]) if lido else "",
+        "editado_em": str(lido.get("last_edited_time") or ""),
+    }
+
+
+def _trocar_trecho(
+    block_id: str, trocar: str, por: str, *, todas: bool, cliente: NotionClient
+) -> dict[str, Any]:
+    try:
+        resultado = svc_conteudo.trocar_trecho(
+            block_id, trocar, por, todas=todas, cliente=cliente
+        )
+    except TrechoAmbiguoError as erro:
+        raise CLIError(
+            f"O trecho '{trocar}' aparece {erro.ocorrencias} vezes no bloco {block_id}; "
+            "repita com --todas para trocar todas, ou use um trecho mais longo.",
+            codigo="trecho_ambiguo",
+            detalhes={"ocorrencias": erro.ocorrencias},
+        ) from erro
+    return {
+        "id": resultado.id,
+        "editado": True,
+        "tipo": resultado.tipo,
+        "ocorrencias": resultado.ocorrencias,
+        "markdown": resultado.markdown,
+        "editado_em": resultado.editado_em,
+    }
 
 
 def cmd_apagar_bloco(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -2645,7 +2782,11 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "# página que contém database: trabalhe nas LINHAS, não escreva solto nela",
         "python -m cli --json linhas <database_id>",
     ],
-    "editar-bloco": ['python -m cli --json editar-bloco <block_id> "## Novo título"'],
+    "editar-bloco": [
+        'python -m cli --json editar-bloco <block_id> "Texto novo do parágrafo"',
+        'python -m cli --json editar-bloco <block_id> --trocar "20:12" --por "20:15"',
+        'python -m cli --json editar-bloco <block_id> --trocar "v1" --por "v2" --todas',
+    ],
     "apagar-bloco": ["python -m cli --json apagar-bloco <block_id> --sim"],
     "limpar": [
         "python -m cli --json limpar <page_id> --sim",
@@ -3150,10 +3291,39 @@ def construir_parser() -> argparse.ArgumentParser:
 
     editar_bloco = sub.add_parser(
         "editar-bloco",
-        help="substitui o texto de um bloco (pegue o block_id em 'blocos')",
+        help="edita UM bloco (pegue o block_id em 'blocos'): reescreve o texto por "
+        "Markdown ou troca só um trecho com --trocar/--por. Confere o bloco antes: "
+        "texto sem prefixo mantém o tipo atual (heading continua heading); prefixo de "
+        "outro tipo, várias linhas e perda de menção/sublinhado/cor são recusados sem "
+        "gravar nada. A saída confirma tipo, markdown e editado_em",
     )
     editar_bloco.add_argument("block_id")
-    editar_bloco.add_argument("conteudo", help="nova linha em Markdown")
+    editar_bloco.add_argument(
+        "conteudo",
+        nargs="?",
+        help="o novo texto do bloco: UMA linha de Markdown (várias linhas são "
+        "recusadas; num bloco de código, o texto inteiro é o código)",
+    )
+    editar_bloco.add_argument(
+        "--trocar",
+        metavar="TRECHO",
+        help="troca só este trecho, mantendo cor, sublinhado, links e menções do resto",
+    )
+    editar_bloco.add_argument(
+        "--por", metavar="TEXTO", help='texto que entra no lugar de --trocar ("" apaga)'
+    )
+    editar_bloco.add_argument(
+        "--todas",
+        action="store_true",
+        help="com --trocar, troca todas as ocorrências (sem isso, exige exatamente uma)",
+    )
+    editar_bloco.add_argument(
+        "--aceitar-perda-de-formatacao",
+        dest="aceitar_perda_de_formatacao",
+        action="store_true",
+        help="reescreve por Markdown mesmo que menção, equação, sublinhado ou cor se "
+        "percam (prefira --trocar)",
+    )
 
     apagar_bloco = sub.add_parser(
         "apagar-bloco",
