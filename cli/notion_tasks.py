@@ -11,7 +11,9 @@ import csv
 import importlib
 import json
 import os
+import re
 import sys
+import time
 import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
@@ -612,6 +614,24 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"DOCX exportados: {dados['total']} | periodo: "
             f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
+    if comando == "inventario":
+        return (
+            f"Inventário: {dados['total']} itens ({dados['paginas']} páginas, "
+            f"{dados['databases']} databases) em {dados['segundos']} s → {dados['saida']}"
+        )
+    if comando == "baixar-corpos":
+        linha = (
+            f"Baixados: {dados['baixados']} | já existiam: {dados['pulados']} | "
+            f"adiados: {dados['adiados']} | falhas: {len(dados['falhas'])} → {dados['destino']}"
+        )
+        return "\n".join([linha, *[f"- {pid}: {erro}" for pid, erro in dados["falhas"].items()]])
+    if comando == "buscar-conteudo":
+        linhas = [f"{dados['total_paginas']} página(s) com '{dados['expressao']}'"]
+        for o in dados["ocorrencias"]:
+            caminho = f"{o['caminho']} / " if o["caminho"] else ""
+            linhas.append(f"\n{o['total']}x  {caminho}{o['titulo']}  ({o['criado_em'] or '?'})")
+            linhas += [f"    … {trecho} …" for trecho in o["trechos"]]
+        return "\n".join(linhas)
     if comando == "modelos":
         if "modelos" in dados:
             linhas = [
@@ -2946,7 +2966,22 @@ def cmd_modelos(args: argparse.Namespace, *, client_factory: ClientFactory) -> A
             return {
                 "database_id": database_id,
                 "total": len(modelos),
-                "modelos": [m.para_dict() for m in modelos],
+                "inventario": [
+        "python -m cli --json inventario --saida inventario.json",
+        "python -m cli --json inventario --saida databases.json --filtro database",
+    ],
+    "baixar-corpos": [
+        "python -m cli --json baixar-corpos inventario.json --destino corpos/ "
+        '--ignorar-caminho "Arquivo" --priorizar "artigo|post|pauta"',
+        "python -m cli --json baixar-corpos inventario.json --destino corpos/ "
+        "--somente-database <database_id> --limite 200",
+    ],
+    "buscar-conteudo": [
+        'python -m cli --json buscar-conteudo corpos/ "publica[cç][aã]o|artigo"',
+        'python -m cli --json buscar-conteudo corpos/ "\\bTODO\\b" --diferenciar-caixa '
+        "--limite 20",
+    ],
+    "modelos": [m.para_dict() for m in modelos],
                 "aviso": AVISO_MODELOS,
             }
         itens = servico.carregar_manifesto(Path(_texto_obrigatorio(args.manifesto, "--manifesto")))
@@ -2965,6 +3000,96 @@ def cmd_modelos(args: argparse.Namespace, *, client_factory: ClientFactory) -> A
         raise _fonte_indefinida(erro, comando) from erro
     dados = {"database_id": database_id, **resultado.para_dict(), "aviso": AVISO_MODELOS}
     return dados
+
+
+def cmd_inventario(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Grava o inventário plano do workspace (datas, caminho, colunas) em JSON."""
+
+    servico = _servico_do_starter("inventario_workspace", comando="inventario")
+    saida = Path(_texto_obrigatorio(args.saida, "--saida"))
+    inicio = time.monotonic()
+    registros = servico.varrer_workspace(
+        filtro=getattr(args, "filtro", None), cliente=client_factory()
+    )
+    servico.salvar_inventario(registros, saida)
+    return {
+        "saida": str(saida.resolve()),
+        **servico.resumir(registros),
+        "segundos": round(time.monotonic() - inicio, 1),
+        "proximo_passo": f"notion-tasks baixar-corpos {saida} --destino <pasta>",
+    }
+
+
+def _progresso_stderr(rotulo: str, a_cada: int) -> Callable[[int, int], None]:
+    """Mostra ``feitas/total`` no stderr a cada ``a_cada`` itens (stdout fica JSON)."""
+
+    def mostrar(feitas: int, total: int) -> None:
+        if a_cada > 0 and (feitas % a_cada == 0 or feitas == total):
+            print(f"[{rotulo}] {feitas}/{total}", file=sys.stderr, flush=True)
+
+    return mostrar
+
+
+def cmd_baixar_corpos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Baixa o Markdown das páginas do inventário, retomável e priorizado."""
+
+    inventario = _servico_do_starter("inventario_workspace", comando="baixar-corpos")
+    corpos = _servico_do_starter("corpos", comando="baixar-corpos")
+    registros = inventario.carregar_inventario(
+        Path(_texto_obrigatorio(args.inventario, "inventario"))
+    )
+    priorizar = None
+    if _normalizar_texto(getattr(args, "priorizar", None)):
+        try:
+            priorizar = re.compile(args.priorizar, re.IGNORECASE)
+        except re.error as exc:
+            raise CLIError(f"--priorizar não é uma expressão regular válida: {exc}") from exc
+    somente = [_id_notion(d, "--somente-database") for d in args.somente_database or []]
+    ignorar = [_id_notion(d, "--ignorar-database") for d in args.ignorar_database or []]
+    paginas = corpos.selecionar_paginas(
+        registros,
+        ignorar_caminhos=args.ignorar_caminho or [],
+        ignorar_databases=ignorar,
+        somente_databases=somente or None,
+        incluir_arquivados=getattr(args, "incluir_arquivados", False) is True,
+    )
+    paginas = corpos.ordenar_por_prioridade(paginas, priorizar=priorizar)
+    resultado = corpos.baixar_corpos(
+        paginas,
+        Path(_texto_obrigatorio(args.destino, "--destino")),
+        trabalhadores=args.trabalhadores,
+        limite=args.limite,
+        ao_progredir=_progresso_stderr("baixar-corpos", args.progresso_a_cada),
+        cliente=client_factory(),
+    )
+    dados = resultado.para_dict()
+    if resultado.adiados or resultado.falhas:
+        dados["proximo_passo"] = "rode o mesmo comando de novo: o que já baixou é pulado"
+    dados["proximo_passo_busca"] = (
+        f'notion-tasks buscar-conteudo {resultado.destino} "<expressão>"'
+    )
+    return dados
+
+
+def cmd_buscar_conteudo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Procura uma expressão regular no texto completo baixado por ``baixar-corpos``."""
+
+    busca = _servico_do_starter("busca_conteudo", comando="buscar-conteudo")
+    ocorrencias = busca.buscar_no_conteudo(
+        Path(_texto_obrigatorio(args.pasta, "pasta")),
+        args.expressao,
+        ignorar_acentos=not getattr(args, "com_acentos", False),
+        ignorar_caixa=not getattr(args, "diferenciar_caixa", False),
+        contexto=args.contexto,
+        max_trechos=args.max_trechos,
+        limite=args.limite,
+    )
+    return {
+        "pasta": args.pasta,
+        "expressao": args.expressao,
+        "total_paginas": len(ocorrencias),
+        "ocorrencias": [o.para_dict() for o in ocorrencias],
+    }
 
 
 def cmd_montar_estrutura_projeto(
@@ -4192,6 +4317,87 @@ def construir_parser() -> argparse.ArgumentParser:
     clonar_estrutura.add_argument("pagina_referencia_id")
     clonar_estrutura.add_argument("pagina_destino_id")
 
+    inventario = sub.add_parser(
+        "inventario",
+        help="grava em JSON cada página/database visível com created_time, "
+        "last_edited_time, caminho de ancestrais e colunas preenchidas (um /search "
+        "paginado; ~1 min para ~4 mil itens)",
+    )
+    inventario.add_argument("--saida", required=True, help="arquivo JSON a gravar")
+    inventario.add_argument(
+        "--filtro", choices=("page", "database"), help="só páginas ou só databases"
+    )
+
+    baixar_corpos = sub.add_parser(
+        "baixar-corpos",
+        help="baixa o corpo (Markdown) das páginas de um inventário, um <id>.md por "
+        "página com cabeçalho de metadados; RETOMÁVEL (o que já baixou é pulado) e "
+        "priorizado (páginas soltas e databases pequenos primeiro)",
+    )
+    baixar_corpos.add_argument("inventario", help="JSON gravado por 'inventario'")
+    baixar_corpos.add_argument("--destino", required=True, help="pasta dos arquivos .md")
+    baixar_corpos.add_argument(
+        "--ignorar-caminho",
+        action="append",
+        metavar="CAMINHO",
+        help='prefixo de caminho a pular, com " / " entre níveis (repita)',
+    )
+    baixar_corpos.add_argument(
+        "--ignorar-database", action="append", metavar="ID", help="database a pular (repita)"
+    )
+    baixar_corpos.add_argument(
+        "--somente-database",
+        action="append",
+        metavar="ID",
+        help="só linhas destes databases (repita)",
+    )
+    baixar_corpos.add_argument(
+        "--priorizar",
+        metavar="REGEX",
+        help="nos databases volumosos, baixa antes as linhas cujo título/colunas casam",
+    )
+    baixar_corpos.add_argument(
+        "--limite", type=int, help="no máximo N páginas nesta rodada (o resto fica adiado)"
+    )
+    baixar_corpos.add_argument(
+        "--trabalhadores",
+        type=int,
+        default=3,
+        help="threads simultâneas (padrão: 3; o Notion limita ~3 req/s)",
+    )
+    baixar_corpos.add_argument(
+        "--incluir-arquivados", action="store_true", help="também baixa itens arquivados"
+    )
+    baixar_corpos.add_argument(
+        "--progresso-a-cada",
+        type=int,
+        default=25,
+        metavar="N",
+        help="mostra o progresso no stderr a cada N páginas (0 desliga)",
+    )
+
+    buscar_conteudo = sub.add_parser(
+        "buscar-conteudo",
+        help="procura uma expressão regular no TEXTO COMPLETO baixado por "
+        "'baixar-corpos' (o 'buscar' casa só o título); sem acentos e sem caixa por "
+        "padrão, com trechos do original",
+    )
+    buscar_conteudo.add_argument("pasta", help="pasta gravada por 'baixar-corpos'")
+    buscar_conteudo.add_argument("expressao", help="expressão regular (sintaxe do Python)")
+    buscar_conteudo.add_argument(
+        "--contexto", type=int, default=90, help="caracteres de cada lado do trecho"
+    )
+    buscar_conteudo.add_argument(
+        "--max-trechos", dest="max_trechos", type=int, default=4, help="trechos por página"
+    )
+    buscar_conteudo.add_argument("--limite", type=int, help="no máximo N páginas")
+    buscar_conteudo.add_argument(
+        "--com-acentos", action="store_true", help="diferencia letras acentuadas"
+    )
+    buscar_conteudo.add_argument(
+        "--diferenciar-caixa", action="store_true", help="diferencia maiúsculas"
+    )
+
     modelos = sub.add_parser(
         "modelos",
         help="modelos nativos (templates) de um database: 'listar' e 'preencher' os "
@@ -4652,6 +4858,12 @@ def _despachar(
         dados = cmd_criar_subpagina(args, client_factory=client_factory)
     elif comando == "inspecionar-estrutura":
         dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
+    elif comando == "inventario":
+        dados = cmd_inventario(args, client_factory=client_factory)
+    elif comando == "baixar-corpos":
+        dados = cmd_baixar_corpos(args, client_factory=client_factory)
+    elif comando == "buscar-conteudo":
+        dados = cmd_buscar_conteudo(args, client_factory=client_factory)
     elif comando == "modelos":
         dados = cmd_modelos(args, client_factory=client_factory)
     elif comando == "copiar-corpo":

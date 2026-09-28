@@ -995,3 +995,29 @@ caminho. Não depende de API nova do starter.
 **Validação.** `tests/test_cli_criar_database.py` (4 testes) falham no código
 anterior (a flag nem existia) e passam agora; o double do padrão levanta erro
 se o comando cair no database do perfil. Nada foi escrito no Notion real.
+
+## [2026-09-27] Acervo: `inventario`, `baixar-corpos` e `buscar-conteudo`
+
+**Contexto.** O `main` 0.5.0 tinha `mapear` (árvore e duplicatas, sem datas) e
+`buscar` (título). Faltava o que a organização de artigos de 2026-09-27 fez
+com script de tarefa: inventário com datas e caminho, download retomável dos
+corpos e busca no texto completo.
+
+**Decisão.** Três comandos sobre os serviços do starter (commit `576d323`
+daquele repositório), importados por `_servico_do_starter`:
+
+- `inventario --saida <json> [--filtro page|database]` grava o inventário e
+  devolve o resumo (totais, datas extremas, segundos);
+- `baixar-corpos <inventario> --destino <pasta>` com `--ignorar-caminho`,
+  `--ignorar-database`, `--somente-database` (repetíveis), `--priorizar`,
+  `--limite`, `--trabalhadores` (3), `--incluir-arquivados` e
+  `--progresso-a-cada` (stderr; o stdout continua JSON);
+- `buscar-conteudo <pasta> <regex>` com `--contexto`, `--max-trechos`,
+  `--limite`, `--com-acentos` e `--diferenciar-caixa`.
+
+Inventário ilegível e expressão inválida viram `validacao` (as exceções do
+starter derivam de `ValueError`); `--priorizar` inválido é recusado na borda.
+
+**Validação.** `tests/test_cli_acervo.py` (7 testes: fluxo de ponta a ponta,
+retomada, saída humana, erros e a recusa sem os serviços para os três
+comandos). Nada foi chamado no Notion real.

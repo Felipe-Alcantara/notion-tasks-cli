@@ -89,7 +89,9 @@ notion-tasks-cli/
   prevê as colunas que o Notion cria no destino e os valores que se perdem, e
   confere o pai relido; `copiar-corpo` copia o corpo de uma página para outra
   bloco a bloco (tabela, checklist, colunas e menções preservados); `modelos`
-  lista e preenche os modelos nativos de um database a partir de um manifesto.
+  lista e preenche os modelos nativos de um database a partir de um manifesto;
+  `inventario` → `baixar-corpos` → `buscar-conteudo` levantam o acervo inteiro
+  (datas, caminho, texto completo) e procuram no texto, não só no título.
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
 - **Relatórios** — exportar relatórios diários para DOCX.
@@ -349,6 +351,12 @@ notion-tasks copiar-corpo <origem_id> <destino_id> --so-se-vazio --conferir
 # Modelos nativos (templates) de um database
 notion-tasks modelos listar <database_id>
 notion-tasks modelos preencher <database_id> --manifesto modelos.json --dry-run
+
+# Acervo: inventário com datas e caminho, corpos retomáveis e busca no texto
+notion-tasks inventario --saida inventario.json
+notion-tasks baixar-corpos inventario.json --destino corpos/ \
+  --ignorar-caminho "Arquivo" --priorizar "artigo|post|pauta"
+notion-tasks buscar-conteudo corpos/ "publica[cç][aã]o|rascunho"
 ```
 
 O `PATCH /pages/{id}` com `parent`, que a versão anterior usava, responde 200 e
@@ -390,6 +398,21 @@ são conferidas antes da primeira escrita. O manifesto é uma lista JSON:
 `arquivo` é Markdown relativo à pasta do manifesto; `copiar_de` copia o corpo de
 outra página bloco a bloco (bom para tabela e colunas). Os valores seguem o
 formato do `editar-linha`. Faltando modelos vazios, a saída diz quantos criar.
+
+O acervo é levantado em três passos, sem repetir chamadas à API:
+
+1. `inventario` faz um `/search` paginado e grava em JSON cada página/database
+   com `created_time`, `last_edited_time`, caminho de ancestrais e colunas
+   preenchidas (medido: 3.841 itens em ~1 min);
+2. `baixar-corpos` grava um `<id>.md` por página, com os metadados num
+   comentário no topo. É **retomável** (o que já baixou é pulado; a gravação é
+   atômica, então uma interrupção não deixa arquivo pela metade) e **priorizado**
+   (páginas soltas e databases pequenos primeiro; `--priorizar` adianta, nos
+   databases volumosos, as linhas cujo título/colunas casam). O corpo de ~1.800
+   páginas levou ~30 min: use `--limite` para rodar em partes; o progresso vai
+   para o stderr;
+3. `buscar-conteudo` procura uma expressão regular no texto completo, sem
+   acentos e sem caixa por padrão, e devolve trechos do texto original.
 
 ### Blocos: mover sem perder nada
 
