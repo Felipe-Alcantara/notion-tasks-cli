@@ -289,6 +289,7 @@ notion-tasks montar-estrutura-projeto <pagina_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --apos <outro_bloco_id>
 notion-tasks reordenar-bloco <pagina_id> <bloco_id> --inicio --dir-backup ~/notion-backups
 notion-tasks garantir-coluna <database_id> Idioma select
+notion-tasks remover-coluna <database_id> "Tema/Pilar" --sim   # apaga os valores também
 notion-tasks importar-planilha <database_id> contas.csv --chave Email --dry-run
 
 # Relatórios diários
@@ -367,7 +368,9 @@ destino as colunas da origem que faltam lá e descarta valores com opção
 inexistente e relações. A saída lista `colunas_acrescentadas_no_destino` e
 `valores_perdidos`; havendo perda, o comando recusa (`validacao`, com o
 `proximo_passo` pronto) até receber `--aceitar-perdas`. Database com mais de um
-data source pede a fonte (`--tipo-pai data_source_id`).
+data source pede a fonte (`--tipo-pai data_source_id`). Para desfazer uma coluna
+que o Notion criou no destino, use `remover-coluna <database_id> <coluna> --sim`
+(destrutivo: os valores dela somem de todas as linhas).
 
 `copiar-corpo` grava no **fim** do destino. Só copia tipos de uma lista branca
 (o lote de 100 blocos da API é atômico: um bloco recusado derrubaria todos);

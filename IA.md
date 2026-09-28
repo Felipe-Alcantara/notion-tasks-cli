@@ -1021,3 +1021,26 @@ starter derivam de `ValueError`); `--priorizar` inválido é recusado na borda.
 **Validação.** `tests/test_cli_acervo.py` (7 testes: fluxo de ponta a ponta,
 retomada, saída humana, erros e a recusa sem os serviços para os três
 comandos). Nada foi chamado no Notion real.
+
+## [2026-09-27] `remover-coluna` e `Criado em` no `linhas --completo`
+
+**Contexto.** Mover linhas entre databases faz o Notion criar colunas no
+destino (medido em 2026-09-27), e não havia comando para desfazê-las: o `main`
+0.5.0 tinha `garantir-coluna` e `renomear-coluna`, mas não remover. E
+`linhas --completo` mostrava `"Criado em": null`, porque o leitor da
+biblioteca não conhecia `created_time`.
+
+**Decisão.**
+
+- `remover-coluna <database_id> <coluna> --sim` chama
+  `notion_starter.services.schema.remover_coluna` (commit `42da753` daquele
+  repositório). Sem `--sim` recusa (`validacao`) sem ler nada e devolve o
+  comando pronto; a biblioteca recusa a coluna de título e coluna inexistente
+  antes de escrever. Como o módulo `schema` já existe no starter publicado, a
+  borda confere o **atributo** e recusa com `configuracao` quando ele falta.
+- `linhas --completo` não mudou na CLI: com o starter novo os leitores de
+  `created_time`, `last_edited_time`, `created_by`, `last_edited_by` e
+  `unique_id` preenchem as colunas que voltavam `null`.
+
+**Validação.** `tests/test_cli_remover_coluna.py` (5 testes; os que dependem
+do starter novo pulam na CI). Nada foi escrito no Notion real.

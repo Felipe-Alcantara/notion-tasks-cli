@@ -3154,6 +3154,29 @@ def cmd_renomear_coluna(args: argparse.Namespace, *, client_factory: ClientFacto
     return {"database_id": database_id, "coluna_antiga": nome_atual, "coluna_nova": novo_nome}
 
 
+def cmd_remover_coluna(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Remove uma coluna do schema (destrutivo: os valores somem de todas as linhas)."""
+
+    database_id = _id_notion(args.database_id, "database_id")
+    coluna = _texto_obrigatorio(args.coluna, "coluna")
+    if not getattr(args, "sim", False):
+        raise CLIError(
+            f"remover-coluna apaga a coluna '{coluna}' e os valores dela em TODAS as linhas "
+            "do database. Confira com 'schema' e repita com --sim.",
+            proximo_passo=f'notion-tasks remover-coluna {database_id} "{coluna}" --sim',
+        )
+    schema_starter = _servico_do_starter("schema", comando="remover-coluna")
+    remover = getattr(schema_starter, "remover_coluna", None)
+    if remover is None:
+        raise CLIError(
+            "'remover-coluna' precisa de notion_starter.services.schema.remover_coluna, que o "
+            "notion-starter instalado ainda não tem. Atualize o notion-starter.",
+            codigo="configuracao",
+            proximo_passo="python -m pip install -e ../notion-starter",
+        )
+    return remover(database_id, coluna, cliente=client_factory())
+
+
 def _resumo_inventario_dict(resumo: Any) -> dict[str, Any]:
     return {
         "repos_encontrados": resumo.repos_encontrados,
@@ -3546,6 +3569,9 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         "python -m cli --json garantir-coluna <database_id> Observações texto",
         "python -m cli --json garantir-coluna <database_id> Projeto relacao "
         "--relacionar-com <database_alvo_id>",
+    ],
+    "remover-coluna": [
+        'python -m cli --json remover-coluna <database_id> "Tema/Pilar" --sim',
     ],
     "renomear-coluna": [
         'python -m cli --json renomear-coluna <database_id> "Related to X (Y)" "Bloqueia"',
@@ -4525,6 +4551,18 @@ def construir_parser() -> argparse.ArgumentParser:
     renomear_coluna.add_argument("nome_atual")
     renomear_coluna.add_argument("novo_nome")
 
+    remover_coluna = sub.add_parser(
+        "remover-coluna",
+        help="REMOVE uma coluna do schema de um database — os valores dela somem de "
+        "todas as linhas; exige --sim e recusa a coluna de título. Útil para desfazer "
+        "as colunas que o Notion cria no destino ao mover linhas entre databases",
+    )
+    remover_coluna.add_argument("database_id")
+    remover_coluna.add_argument("coluna", help="nome exato da coluna")
+    remover_coluna.add_argument(
+        "--sim", action="store_true", help="confirma a remoção (sem ele, nada é feito)"
+    )
+
     atualizar_github = sub.add_parser(
         "atualizar-github",
         help="re-sincroniza o database GITHUB (repos novos, propriedades, README mudado)",
@@ -4876,6 +4914,8 @@ def _despachar(
         dados = cmd_reordenar_bloco(args, client_factory=client_factory)
     elif comando == "garantir-coluna":
         dados = cmd_garantir_coluna(args, client_factory=client_factory)
+    elif comando == "remover-coluna":
+        dados = cmd_remover_coluna(args, client_factory=client_factory)
     elif comando == "renomear-coluna":
         dados = cmd_renomear_coluna(args, client_factory=client_factory)
     elif comando == "atualizar-github":
