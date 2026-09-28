@@ -2702,17 +2702,6 @@ def test_anexar_arquivo_sobe_e_grava_propriedade(tmp_path):
     assert "Arquivos e mídia" in atualizacao[1][1]
 
 
-def test_mover_pagina_avisa_sobre_databases():
-    fake = FakeNovosClient()
-    codigo, saida = _executar(
-        ["--json", "mover-pagina", "pag1", "pai2", "--tipo-pai", "database_id"],
-        client=fake,
-    )
-    assert codigo == 0
-    assert ("mover_pagina", ("pag1", "pai2", "database_id")) in fake.chamadas
-    assert "mover-database" in saida["dados"]["aviso"]
-
-
 def test_mover_database_reparenteia():
     fake = FakeNovosClient()
     codigo, saida = _executar(["--json", "mover-database", "db1", "pai2"], client=fake)

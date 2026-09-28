@@ -46,7 +46,11 @@ uma faixa versionada (`>=0.4.0,<0.5.0`), sem URL Git em `Requires-Dist`. O piso
 é a série do starter que a suíte testa (`tests/test_pyproject.py`), porque a CLI
 importa a API dele no topo do módulo: com um starter mais antigo, a CLI inteira
 não importa (nenhum comando abre, nem `--help`), não é só um comando que falha.
-Por isso o starter é publicado antes da CLI; a ordem está no README. O extra
+Por isso o starter é publicado antes da CLI; a ordem está no README. Exceção
+motivada: comandos que dependem de serviço do starter ainda **não publicado**
+importam esse serviço dentro do próprio comando (`_servico_do_starter`), para a
+CLI continuar abrindo com o starter do PyPI; os testes deles usam `skipif` e rodam
+por inteiro no desenvolvimento com o starter editável. O extra
 `app` adiciona o app Django/MCP. Wheel e sdist são validados por `twine check` e
 publicados no [PyPI](https://pypi.org/project/notion-automacoes/) por Trusted
 Publishing. A titularidade legal declarada no pacote é `Felipe Alcantara`.

@@ -84,6 +84,9 @@ notion-tasks-cli/
 - **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas;
   `exemplo` devolve uma amostra de linhas com propriedades e corpo completos.
 - **Propriedades** — substituir ou acrescentar valores em linhas de database.
+- **Organizar o workspace** — `mover-pagina` move de verdade (endpoint `/move`),
+  prevê as colunas que o Notion cria no destino e os valores que se perdem, e
+  confere o pai relido.
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
 - **Relatórios** — exportar relatórios diários para DOCX.
@@ -319,6 +322,30 @@ Use `--dry-run` para executar o preflight e visualizar as propriedades/relação
 planejadas sem criar ou editar nada. Com `--arquivo --strict`, todas as linhas
 são validadas primeiro; uma entrada inválida bloqueia o lote inteiro para evitar
 escrita parcial. `--arquivo --dry-run` mostra o plano de cada linha.
+
+### Organizar o workspace
+
+Estes comandos usam serviços do `notion-starter` que entraram no `main` depois
+do último release publicado. Com o starter do PyPI eles recusam com o código
+`configuracao` e dizem o que atualizar; o resto da CLI continua funcionando.
+
+```bash
+# Mover uma página: prevê, recusa perda sem aceite e confere o pai relido
+notion-tasks mover-pagina <page_id> <pagina_pai_id>
+notion-tasks mover-pagina <page_id> <database_id> --tipo-pai database_id --dry-run
+notion-tasks mover-pagina <page_id> <database_id> --tipo-pai database_id --aceitar-perdas
+notion-tasks mover-pagina <page_id> <data_source_id> --tipo-pai data_source_id
+```
+
+O `PATCH /pages/{id}` com `parent`, que a versão anterior usava, responde 200 e
+o Notion **ignora** o campo (medido em 2026-09-27): o comando reportava um
+movimento que não acontecia. Agora ele usa `POST /pages/{id}/move` e relê a
+página. Mover uma linha para **outro** database muda colunas: o Notion cria no
+destino as colunas da origem que faltam lá e descarta valores com opção
+inexistente e relações. A saída lista `colunas_acrescentadas_no_destino` e
+`valores_perdidos`; havendo perda, o comando recusa (`validacao`, com o
+`proximo_passo` pronto) até receber `--aceitar-perdas`. Database com mais de um
+data source pede a fonte (`--tipo-pai data_source_id`).
 
 ### Blocos: mover sem perder nada
 

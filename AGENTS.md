@@ -35,6 +35,10 @@ valida o contrato de projeto antes de delegar a escrita para esses serviços.
 - Comando destrutivo exige confirmação explícita (`apagar-bloco --sim`).
 - Valide status/opções **antes** de chamar a API (previne 400); saneie surrogates com `notion_starter.utils`.
 - Ao editar uma linha de database, **comece pelas propriedades** (colunas) com `editar-linha` e só depois escreva o conteúdo (blocos) com `escrever`. `editar-linha` (`services/propriedades.py`) infere o tipo de cada coluna da própria página (`NotionClient.obter_pagina`) e recusa tipos calculados (formula, rollup, created_time…). `--set "Nome=valor"` substitui; `--append "Nome=texto"` acrescenta ao final de colunas de texto (title/rich_text) preservando o conteúdo atual. Texto longo é fatiado em ≤2000 unidades pelos builders da lib (`properties.title`/`rich_text`). Não volte a montar payload cru do Notion para isso.
+- Serviço do `notion-starter` que ainda não saiu em release publicado é importado
+  **dentro do comando**, por `_servico_do_starter(nome, comando=...)`: com o starter
+  do PyPI só aquele comando recusa (`configuracao`), a CLI continua abrindo. Os
+  testes desses comandos pulam quando o serviço não existe (a CI usa o PyPI).
 - Código e mensagens em português; Conventional Commits.
 
 ## Testar

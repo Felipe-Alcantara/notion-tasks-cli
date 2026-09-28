@@ -897,3 +897,38 @@ resolveria); (3) push e tag desta CLI. O app não foi alterado nesta execução.
 **Validação.** `ruff check .` limpo e `python -m pytest` com 333 testes. Os três
 testes de `tests/test_pyproject.py` falham com o `pyproject.toml` anterior
 (conferido restaurando o arquivo do `HEAD`) e passam agora.
+
+## [2026-09-27] `mover-pagina` verificado: previsão de colunas e recusa de perda
+
+**O que estava errado (medido no workspace real em 2026-09-27).** O comando
+chamava `NotionClient.mover_pagina`, que fazia `PATCH /pages/{id}` com
+`parent`; o Notion responde 200 e ignora o campo, e a CLI dizia que tinha
+movido. O `aviso` sobre "página que contém databases" descrevia um caso
+particular do mesmo defeito.
+
+**Decisão.** A regra foi para o `notion-starter` (commit `3130d5e` daquele
+repositório): o cliente usa `POST /pages/{id}/move` e relê o pai, e
+`services.movimentacao` prevê as colunas. A borda:
+
+- ganhou `--tipo-pai data_source_id`, `--dry-run` e `--aceitar-perdas`;
+- traduz `MovimentoComPerdasError` e `FonteDeDadosIndefinidaError` em
+  `validacao`, com `proximo_passo` pronto e a previsão (ou as fontes) em
+  `detalhes`;
+- mantém `id`, `novo_pai` e `aviso` na saída e acrescenta a previsão
+  (`colunas_acrescentadas_no_destino`, `valores_perdidos`, `colunas_mantidas`,
+  `movido`, `pai_novo`);
+- mostra, na saída humana, uma linha por coluna criada e por valor perdido.
+
+**Dependência do starter.** O serviço não existe no `notion-starter 0.4.1`
+publicado. Importá-lo no topo derrubaria a CLI inteira na CI (que resolve o
+starter do PyPI), então ele é importado dentro do comando por
+`_servico_do_starter`, que recusa com `configuracao` quando falta. Os testes do
+comando pulam sem o serviço; o teste da recusa roda sempre. Quando o starter
+com a API nova for publicado, a faixa do `pyproject.toml` deve subir e a
+importação pode voltar ao topo.
+
+**Validação.** `tests/test_cli_mover_pagina.py` (6 testes; o antigo
+`test_mover_pagina_avisa_sobre_databases` saiu, porque fixava o aviso do
+`PATCH`). Suíte com o starter do checkout: 336 passam; com o starter 0.4.1 do
+PyPI, como na CI: 331 passam e 7 pulam. Não houve teste contra o Notion real
+nesta entrega.

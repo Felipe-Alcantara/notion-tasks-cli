@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NoReturn
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -138,6 +140,28 @@ def _id_opcional(valor: str | None, campo: str, *, bloco: bool = False) -> str |
     if _normalizar_texto(valor) is None:
         return None
     return _id_notion(valor, campo, bloco=bloco)
+
+
+def _servico_do_starter(nome: str, *, comando: str) -> ModuleType:
+    """Importa ``notion_starter.services.<nome>`` só quando o comando roda.
+
+    Os comandos de organização do workspace (``mover-pagina`` verificado,
+    ``modelos``, ``copiar-corpo``, ``inventario``…) usam serviços que entraram
+    no ``notion-starter`` depois do último release publicado. Importar no topo
+    derrubaria a CLI inteira com o starter do PyPI; aqui só o comando que
+    precisa do serviço recusa, com uma mensagem que diz o que atualizar.
+    """
+
+    try:
+        return importlib.import_module(f"notion_starter.services.{nome}")
+    except ImportError as exc:
+        raise CLIError(
+            f"'{comando}' precisa do serviço notion_starter.services.{nome}, que o "
+            "notion-starter instalado ainda não tem. Atualize o notion-starter (checkout "
+            "de desenvolvimento em modo editável, ou o próximo release publicado).",
+            codigo="configuracao",
+            proximo_passo="python -m pip install -e ../notion-starter",
+        ) from exc
 
 
 def _markdown_da_entrada(
@@ -588,6 +612,17 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"DOCX exportados: {dados['total']} | periodo: "
             f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
+    if comando == "mover-pagina":
+        linhas = [dados["aviso"]]
+        linhas += [
+            f"+ coluna nova no destino: {c['nome']} ({c['tipo']})"
+            for c in dados.get("colunas_acrescentadas_no_destino", [])
+        ]
+        linhas += [
+            f"- valor perdido: {c['nome']} — {c['motivo']}"
+            for c in dados.get("valores_perdidos", [])
+        ]
+        return "\n".join(linhas)
     if comando == "perfis":
         if "perfis" in dados:
             registros = dados["perfis"]
@@ -2993,18 +3028,61 @@ def cmd_anexar_arquivo(args: argparse.Namespace, *, client_factory: ClientFactor
 
 
 def cmd_mover_pagina(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Move uma página prevendo antes o que muda nas colunas, e confere o pai.
+
+    A regra (previsão, recusa de perda, endpoint ``/move`` e releitura) vive em
+    ``notion_starter.services.movimentacao``; aqui só se traduzem as recusas
+    para o envelope, com o comando para aceitar a perda ou escolher a fonte.
+    """
+
     page_id = _id_notion(args.page_id, "page_id")
     destino = _id_notion(args.novo_pai_id, "novo_pai_id")
-    client_factory().mover_pagina(page_id, destino, tipo_pai=args.tipo_pai)
-    return {
-        "id": page_id,
-        "novo_pai": destino,
-        "tipo_pai": args.tipo_pai,
-        "aviso": (
-            "Se esta página CONTÉM databases, a API aceita mas ignora o movimento: "
-            "mova cada database com 'mover-database' e descarte a página vazia."
-        ),
-    }
+    movimentacao = _servico_do_starter("movimentacao", comando="mover-pagina")
+    from notion_starter.exceptions import FonteDeDadosIndefinidaError
+
+    dry_run = getattr(args, "dry_run", False) is True
+    try:
+        resultado = movimentacao.mover_pagina(
+            page_id,
+            destino,
+            tipo_pai=args.tipo_pai,
+            dry_run=dry_run,
+            aceitar_perdas=getattr(args, "aceitar_perdas", False) is True,
+            cliente=client_factory(),
+        )
+    except movimentacao.MovimentoComPerdasError as erro:
+        raise CLIError(
+            str(erro),
+            codigo="validacao",
+            proximo_passo=f"notion-tasks mover-pagina {page_id} {destino} "
+            f"--tipo-pai {args.tipo_pai} --aceitar-perdas",
+            detalhes=erro.previsao.para_dict(),
+        ) from erro
+    except FonteDeDadosIndefinidaError as erro:
+        primeira = erro.fontes[0][0] if erro.fontes else "<data_source_id>"
+        raise CLIError(
+            str(erro),
+            codigo="validacao",
+            proximo_passo=f"notion-tasks mover-pagina {page_id} {primeira} "
+            "--tipo-pai data_source_id",
+            detalhes={
+                "database_id": erro.database_id,
+                "data_sources": [{"id": fid, "nome": nome} for fid, nome in erro.fontes],
+            },
+        ) from erro
+
+    dados = resultado.para_dict()
+    criadas = [c["nome"] for c in dados["colunas_acrescentadas_no_destino"]]
+    if dry_run:
+        aviso = "Simulação: nada foi movido."
+    elif criadas:
+        aviso = (
+            f"Movimento conferido. O Notion criou no destino as colunas {', '.join(criadas)}; "
+            "se não as quiser lá, remova-as do schema do destino."
+        )
+    else:
+        aviso = "Movimento conferido: o pai relido é o destino pedido."
+    return {"id": page_id, "novo_pai": destino, "dry_run": dry_run, **dados, "aviso": aviso}
 
 
 def cmd_mover_database(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
@@ -3235,7 +3313,12 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     ],
     "mover-pagina": [
         "python -m cli --json mover-pagina <page_id> <nova_pagina_pai_id>",
-        "python -m cli --json mover-pagina <page_id> <database_id> --tipo-pai database_id",
+        "python -m cli --json mover-pagina <page_id> <database_id> --tipo-pai database_id "
+        "--dry-run",
+        "python -m cli --json mover-pagina <page_id> <database_id> --tipo-pai database_id "
+        "--aceitar-perdas",
+        "python -m cli --json mover-pagina <page_id> <data_source_id> "
+        "--tipo-pai data_source_id",
     ],
     "renomear-database": [
         'python -m cli --json renomear-database <database_id> "Novo título"',
@@ -4159,16 +4242,31 @@ def construir_parser() -> argparse.ArgumentParser:
 
     mover_pagina = sub.add_parser(
         "mover-pagina",
-        help="move (re-parenteia) uma página para outra página ou database",
+        help="move uma página para outra página, database ou data source e confere o "
+        "pai relido; antes, prevê as colunas que o Notion cria no destino e os "
+        "valores que se perdem (perda exige --aceitar-perdas)",
     )
     mover_pagina.add_argument("page_id")
     mover_pagina.add_argument("novo_pai_id")
     mover_pagina.add_argument(
         "--tipo-pai",
         dest="tipo_pai",
-        choices=("page_id", "database_id"),
+        choices=("page_id", "database_id", "data_source_id"),
         default="page_id",
-        help="tipo do novo pai (padrão: page_id)",
+        help="tipo do novo pai (padrão: page_id); database_id usa o único data source "
+        "do database — com vários, informe a fonte e use data_source_id",
+    )
+    mover_pagina.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="só mostra a previsão (colunas criadas no destino, valores perdidos)",
+    )
+    mover_pagina.add_argument(
+        "--aceitar-perdas",
+        dest="aceitar_perdas",
+        action="store_true",
+        help="move mesmo que algum valor de coluna vá se perder (relação, opção "
+        "inexistente no destino, tipo diferente)",
     )
 
     mover_database = sub.add_parser(
