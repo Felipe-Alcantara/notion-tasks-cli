@@ -707,21 +707,36 @@ def cmd_ler(args: argparse.Namespace, *, tasklist_factory: TaskListFactory) -> A
     )
 
 
+def _tasklist_do_database(database_id: str, client_factory: ClientFactory) -> TaskListFactory:
+    """``TaskList`` de um database escolhido na chamada (``criar --database``)."""
+
+    return lambda: TaskList(client_factory(), database_id)
+
+
 def cmd_criar(
     args: argparse.Namespace,
     *,
     tasklist_factory: TaskListFactory,
     client_factory: ClientFactory = _criar_client,
 ) -> Any:
-    """Cria uma linha nova no database atual.
+    """Cria uma linha nova no database atual ou no de ``--database``.
 
     O ``TaskList`` descobre a coluna de título e só aplica os atalhos de tarefa
     (status, prazo, duração e área) quando as respectivas colunas existem.
     ``--set`` completa quaisquer outras propriedades depois da criação.
+    ``--database`` troca só o destino desta chamada (o padrão do perfil não
+    muda), valendo também para ``--arquivo`` e ``--dry-run``.
 
     Quando ``--status`` é usado, valida o valor contra as opções do modelo de
     tarefas antes de enviar, evitando ``Invalid status option`` da API.
     """
+    database_bruto = getattr(args, "database", None)
+    database = (
+        _id_opcional(database_bruto, "--database") if isinstance(database_bruto, str) else None
+    )
+    if database:
+        tasklist_factory = _tasklist_do_database(database, client_factory)
+
     arquivo = _argumento_arquivo_lote(args)
     estrito = getattr(args, "strict", False) is True
     dry_run = getattr(args, "dry_run", False) is True
@@ -784,6 +799,7 @@ def cmd_criar(
     if dry_run:
         dados_dry_run: dict[str, Any] = {
             "nome": nome,
+            "database_id": _database_id_tasklist(tasklist),
             "dry_run": True,
             "escrever": False,
             "propriedades_planejadas": dict(extras),
@@ -802,6 +818,8 @@ def cmd_criar(
         tasklist=tasklist,
     )
     dados = _tarefa_dict(tarefa)
+    if database:
+        dados["database_id"] = database
 
     # A partir daqui a linha JÁ EXISTE. Qualquer falha abaixo é reportada com o
     # id junto, para quem chamou poder completar a linha em vez de criar outra —
@@ -3267,6 +3285,8 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
         '--set "URL de referência=https://github.com/owner/repo/tree/main" --strict',
         'python -m cli --json criar --arquivo novas-linhas.json --strict --dry-run',
         "python -m cli --json criar --arquivo novas-linhas.json --progresso-a-cada 25",
+        'python -m cli --json criar "Ideia de artigo" --database <database_id> '
+        '--set "Etapa=Ideia" --conteudo "## Rascunho"',
     ],
     "editar": ['python -m cli --json editar <task_id> --status "Concluída"'],
     "mover": ['python -m cli --json mover <task_id> "Concluída"'],
@@ -3588,9 +3608,17 @@ def construir_parser() -> argparse.ArgumentParser:
     ler.add_argument("task_id")
 
     criar = sub.add_parser(
-        "criar", help="cria uma linha no database atual (tarefas ou schema genérico)"
+        "criar",
+        help="cria uma linha no database atual — ou em QUALQUER database com "
+        "--database <id> (tarefas ou schema genérico)",
     )
     criar.add_argument("nome", nargs="?")
+    criar.add_argument(
+        "--database",
+        metavar="DATABASE_ID",
+        help="database de destino só desta chamada (ID ou link); sem ele, usa o "
+        "database do perfil/NOTION_DATABASE_ID",
+    )
     criar.add_argument("--status")
     criar.add_argument("--prazo")
     criar.add_argument("--duracao")

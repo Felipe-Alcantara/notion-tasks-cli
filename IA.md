@@ -976,3 +976,22 @@ importado por `_servico_do_starter`:
 
 **Validação.** `tests/test_cli_modelos.py` (6 testes). Nada foi escrito no
 Notion real.
+
+## [2026-09-27] `criar --database`: linha em qualquer database
+
+**O que faltava.** `criar` só gravava no database do perfil ativo /
+`NOTION_DATABASE_ID`. O `TaskList` já descobria a coluna de título de qualquer
+schema (o README chamava isso de "linha em qualquer database"), mas não havia
+como apontar outro database sem trocar de perfil ou escrever script — a
+implementação de tarefa que organizou artigos em 2026-09-27 criava a linha com
+chamada direta ao cliente e completava com `editar_linha`.
+
+**Decisão.** `--database <id|link>` troca o destino **só desta chamada**
+(`_tasklist_do_database`), inclusive no modo `--arquivo` e no `--dry-run`; a
+saída ganha `database_id` quando a flag é usada (e sempre no `--dry-run`). O
+resto (`--set`, `--conteudo`, `--arquivo-md`, `--strict`) segue o mesmo
+caminho. Não depende de API nova do starter.
+
+**Validação.** `tests/test_cli_criar_database.py` (4 testes) falham no código
+anterior (a flag nem existia) e passam agora; o double do padrão levanta erro
+se o comando cair no database do perfil. Nada foi escrito no Notion real.

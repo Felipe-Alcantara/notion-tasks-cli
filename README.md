@@ -78,7 +78,8 @@ notion-tasks-cli/
 ## 🚀 Funcionalidades
 
 - **Tarefas** — listar, criar, editar, mover e concluir; `criar` também aceita
-  databases genéricos ao descobrir a coluna de título pelo schema.
+  databases genéricos ao descobrir a coluna de título pelo schema, e
+  `--database <id>` grava em qualquer database, não só no padrão do perfil.
 - **Projetos** — `criar` e `editar-linha` podem resolver a relação `Projeto` a
   partir da URL GitHub; `--strict` valida URL, relação e título antes de escrever.
 - **Workspace** — mapear o inventário, buscar páginas/databases e listar linhas;
@@ -228,6 +229,9 @@ notion-tasks concluir <id> "Concluído"
 # Linha em qualquer database (a coluna title é descoberta automaticamente)
 notion-tasks criar "Relatório — 25/08/2026" \
   --set "Data=2026-08-25" --set "Status=Concluído" --conteudo "# Resultado"
+# ...em outro database só nesta chamada (ID ou link; vale com --arquivo e --dry-run)
+notion-tasks criar "Ideia de artigo" --database <database_id> \
+  --set "Etapa=Ideia" --conteudo "## Rascunho"
 
 # Projeto GitHub: a URL resolve a única linha correspondente da database GITHUB
 notion-tasks criar "Automações-do-Notion/Tasks — nova regra" \
