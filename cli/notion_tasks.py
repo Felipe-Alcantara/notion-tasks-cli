@@ -612,6 +612,18 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"DOCX exportados: {dados['total']} | periodo: "
             f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
+    if comando == "copiar-corpo":
+        if dados["pulado"]:
+            return "Destino já tinha conteúdo: nada foi copiado (--so-se-vazio)."
+        verbo = "Seriam copiados" if dados["dry_run"] else "Copiados"
+        tipos = ", ".join(f"{tipo}: {n}" for tipo, n in dados["por_tipo"].items())
+        linhas = [f"{verbo} {dados['blocos_total']} blocos ({tipos or 'nenhum'})."]
+        linhas += [f"- ignorado {b['tipo']} ({b['id']}): {b['motivo']}" for b in dados["ignorados"]]
+        if dados["conferencia"] is not None:
+            linhas.append(
+                "Conferência: " + ("confere" if dados["conferencia"]["confere"] else "DIVERGE")
+            )
+        return "\n".join(linhas)
     if comando == "mover-pagina":
         linhas = [dados["aviso"]]
         linhas += [
@@ -2837,6 +2849,28 @@ def cmd_clonar_estrutura(args: argparse.Namespace, *, client_factory: ClientFact
     }
 
 
+def cmd_copiar_corpo(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """Copia o corpo de uma página para o fim de outra, bloco a bloco.
+
+    A regra (lista branca de tipos, remoção de ``null``, aninhamento em etapas,
+    desfazer em falha) vive em ``notion_starter.services.copia_corpo``.
+    """
+
+    origem = _id_notion(args.origem_id, "origem_id")
+    destino = _id_notion(args.destino_id, "destino_id")
+    copia = _servico_do_starter("copia_corpo", comando="copiar-corpo")
+    resultado = copia.copiar_corpo(
+        origem,
+        destino,
+        so_se_vazio=getattr(args, "so_se_vazio", False) is True,
+        mesmo_com_database=getattr(args, "mesmo_com_database", False) is True,
+        dry_run=getattr(args, "dry_run", False) is True,
+        conferir=getattr(args, "conferir", False) is True,
+        cliente=client_factory(),
+    )
+    return resultado.para_dict()
+
+
 def cmd_montar_estrutura_projeto(
     args: argparse.Namespace, *, client_factory: ClientFactory
 ) -> Any:
@@ -3259,6 +3293,11 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "inspecionar-estrutura": [
         "python -m cli --json inspecionar-estrutura <pagina_id>",
         "python -m cli --json inspecionar-estrutura <pagina_id> --profundidade 1",
+    ],
+    "copiar-corpo": [
+        "python -m cli --json copiar-corpo <pagina_origem_id> <pagina_destino_id> --dry-run",
+        "python -m cli --json copiar-corpo <pagina_origem_id> <pagina_destino_id> "
+        "--so-se-vazio --conferir",
     ],
     "clonar-estrutura": [
         "python -m cli --json clonar-estrutura <pagina_referencia_id> <pagina_destino_id>",
@@ -4040,6 +4079,35 @@ def construir_parser() -> argparse.ArgumentParser:
     clonar_estrutura.add_argument("pagina_referencia_id")
     clonar_estrutura.add_argument("pagina_destino_id")
 
+    copiar_corpo = sub.add_parser(
+        "copiar-corpo",
+        help="copia o corpo de uma página para o fim de outra BLOCO A BLOCO (tabela, "
+        "checklist, colunas, callout e menções preservados, sem passar por Markdown); "
+        "subpágina, database e arquivo hospedado no Notion ficam em 'ignorados'",
+    )
+    copiar_corpo.add_argument("origem_id", help="página de onde ler")
+    copiar_corpo.add_argument("destino_id", help="página que recebe os blocos (no fim)")
+    copiar_corpo.add_argument(
+        "--so-se-vazio",
+        dest="so_se_vazio",
+        action="store_true",
+        help="não escreve se o destino já tiver algum bloco (idempotente ao repetir)",
+    )
+    copiar_corpo.add_argument(
+        "--dry-run", action="store_true", help="só lê e planeja; mostra a contagem por tipo"
+    )
+    copiar_corpo.add_argument(
+        "--conferir",
+        action="store_true",
+        help="relê o destino antes e depois e compara a contagem de blocos por tipo",
+    )
+    copiar_corpo.add_argument(
+        "--mesmo-com-database",
+        dest="mesmo_com_database",
+        action="store_true",
+        help="aceita escrever num destino que contém database",
+    )
+
     montar_estrutura_projeto = sub.add_parser(
         "montar-estrutura-projeto",
         help="aplica o padrão fixo de projeto do workspace (## Acompanhamento com 4 "
@@ -4444,6 +4512,8 @@ def _despachar(
         dados = cmd_criar_subpagina(args, client_factory=client_factory)
     elif comando == "inspecionar-estrutura":
         dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
+    elif comando == "copiar-corpo":
+        dados = cmd_copiar_corpo(args, client_factory=client_factory)
     elif comando == "clonar-estrutura":
         dados = cmd_clonar_estrutura(args, client_factory=client_factory)
     elif comando == "montar-estrutura-projeto":

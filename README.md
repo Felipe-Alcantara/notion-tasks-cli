@@ -86,7 +86,8 @@ notion-tasks-cli/
 - **Propriedades** — substituir ou acrescentar valores em linhas de database.
 - **Organizar o workspace** — `mover-pagina` move de verdade (endpoint `/move`),
   prevê as colunas que o Notion cria no destino e os valores que se perdem, e
-  confere o pai relido.
+  confere o pai relido; `copiar-corpo` copia o corpo de uma página para outra
+  bloco a bloco (tabela, checklist, colunas e menções preservados).
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
 - **Relatórios** — exportar relatórios diários para DOCX.
@@ -335,6 +336,10 @@ notion-tasks mover-pagina <page_id> <pagina_pai_id>
 notion-tasks mover-pagina <page_id> <database_id> --tipo-pai database_id --dry-run
 notion-tasks mover-pagina <page_id> <database_id> --tipo-pai database_id --aceitar-perdas
 notion-tasks mover-pagina <page_id> <data_source_id> --tipo-pai data_source_id
+
+# Copiar o corpo bloco a bloco (sem passar por Markdown)
+notion-tasks copiar-corpo <origem_id> <destino_id> --dry-run
+notion-tasks copiar-corpo <origem_id> <destino_id> --so-se-vazio --conferir
 ```
 
 O `PATCH /pages/{id}` com `parent`, que a versão anterior usava, responde 200 e
@@ -346,6 +351,15 @@ inexistente e relações. A saída lista `colunas_acrescentadas_no_destino` e
 `valores_perdidos`; havendo perda, o comando recusa (`validacao`, com o
 `proximo_passo` pronto) até receber `--aceitar-perdas`. Database com mais de um
 data source pede a fonte (`--tipo-pai data_source_id`).
+
+`copiar-corpo` grava no **fim** do destino. Só copia tipos de uma lista branca
+(o lote de 100 blocos da API é atômico: um bloco recusado derrubaria todos);
+subpágina, database, `link_preview` e arquivo hospedado no Notion (o link
+expira) vão para `ignorados` com o motivo. Menção que não se regrava vira texto
+com o link e o bloco aparece em `degradados`. `--so-se-vazio` torna a cópia
+idempotente, `--conferir` relê o destino e compara a contagem por tipo, e
+destino com database só recebe com `--mesmo-com-database`. Numa falha no meio,
+o que foi criado volta para a lixeira (`escrita_parcial`).
 
 ### Blocos: mover sem perder nada
 

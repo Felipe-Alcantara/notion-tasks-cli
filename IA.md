@@ -932,3 +932,25 @@ importação pode voltar ao topo.
 `PATCH`). Suíte com o starter do checkout: 336 passam; com o starter 0.4.1 do
 PyPI, como na CI: 331 passam e 7 pulam. Não houve teste contra o Notion real
 nesta entrega.
+
+## [2026-09-27] `copiar-corpo`: cópia bloco a bloco entre páginas
+
+**Contexto.** Consolidar páginas e preencher modelos exigia copiar um corpo com
+tabela, checklist e colunas; o único caminho da CLI era `conteudo` + `escrever`,
+que passa por Markdown e perde isso. Não havia comando parecido no `main`
+0.5.0 (`clonar-estrutura` copia títulos de subpágina e schema, não blocos).
+
+**Decisão.** Comando novo `copiar-corpo <origem> <destino>` com
+`--so-se-vazio`, `--dry-run`, `--conferir` e `--mesmo-com-database`. A regra
+é do `notion-starter` (`services.copia_corpo`, commit `445f3cc` daquele
+repositório), importada dentro do comando por `_servico_do_starter`. A saída
+JSON é `ResultadoCopia.para_dict()` (`por_tipo`, `ignorados` com motivo,
+`degradados`, `escritas`, `pulado`, `conferencia`); a humana resume a contagem
+e lista cada bloco ignorado. Falha no meio vira `EscritaParcialError`, que a
+classificação existente já transforma em `escrita_parcial` com o que foi
+desfeito.
+
+**Validação.** `tests/test_cli_copiar_corpo.py` (5 testes: cópia com
+subpágina ignorada e payload sem `null`/`plain_text`, `--so-se-vazio`, dry-run
+humano, origem igual ao destino, recusa sem o serviço). Nada foi escrito no
+Notion real.
