@@ -954,3 +954,25 @@ desfeito.
 subpágina ignorada e payload sem `null`/`plain_text`, `--so-se-vazio`, dry-run
 humano, origem igual ao destino, recusa sem o serviço). Nada foi escrito no
 Notion real.
+
+## [2026-09-27] `modelos listar|preencher`: modelos nativos de database
+
+**Contexto.** O `main` 0.5.0 não tinha nada para modelos nativos: o hub já
+registrava (10/08/2026) que a API não cria modelo, e preencher os modelos
+exigia script de tarefa com chamada privada ao cliente.
+
+**Decisão.** Comando novo com dois subcomandos, sobre
+`notion_starter.services.modelos` (commit `9cfe49e` daquele repositório),
+importado por `_servico_do_starter`:
+
+- `modelos listar <database_id> [--fonte]` devolve `id`, `nome`, `padrao` e o
+  aviso do limite da API;
+- `modelos preencher <database_id> --manifesto <arquivo> [--fonte] [--dry-run]`
+  devolve uma ação por item (`preenchido`, `completado`, `ja_existia`,
+  `sem_modelo_vazio`) e `faltam_modelos_vazios`;
+- `ManifestoInvalidoError` vira `validacao` com a lista de `problemas`;
+  database com várias fontes vira `validacao` com as fontes e o `--fonte`
+  pronto.
+
+**Validação.** `tests/test_cli_modelos.py` (6 testes). Nada foi escrito no
+Notion real.

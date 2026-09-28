@@ -612,6 +612,20 @@ def _formatar_humano(comando: str, dados: Any) -> str:
             f"DOCX exportados: {dados['total']} | periodo: "
             f"{dados['periodo']['de']} a {dados['periodo']['ate']} | saida: {dados['saida']}"
         )
+    if comando == "modelos":
+        if "modelos" in dados:
+            linhas = [
+                f"{m['id']}  {m['nome'] or '(sem nome)'}" + ("  [padrão]" if m["padrao"] else "")
+                for m in dados["modelos"]
+            ]
+            return "\n".join([*linhas, dados["aviso"]]) if linhas else dados["aviso"]
+        prefixo = "[simulação] " if dados["dry_run"] else ""
+        linhas = [f"{prefixo}{a['acao']}: {a['nome']}" for a in dados["acoes"]]
+        if dados["faltam_modelos_vazios"]:
+            linhas.append(
+                f"Faltam {dados['faltam_modelos_vazios']} modelo(s) em branco. {dados['aviso']}"
+            )
+        return "\n".join(linhas)
     if comando == "copiar-corpo":
         if dados["pulado"]:
             return "Destino já tinha conteúdo: nada foi copiado (--so-se-vazio)."
@@ -2871,6 +2885,70 @@ def cmd_copiar_corpo(args: argparse.Namespace, *, client_factory: ClientFactory)
     return resultado.para_dict()
 
 
+AVISO_MODELOS = (
+    "A API do Notion lista e preenche modelos, mas não cria modelo nem escolhe o padrão: "
+    "crie modelos em branco pela interface (Novo modelo, sem digitar nada) e defina o "
+    "padrão por lá."
+)
+
+
+def _fonte_indefinida(erro: Any, comando: str) -> CLIError:
+    """``FonteDeDadosIndefinidaError`` vira recusa com as fontes e o ``--fonte`` pronto."""
+
+    primeira = erro.fontes[0][0] if erro.fontes else "<data_source_id>"
+    return CLIError(
+        str(erro),
+        codigo="validacao",
+        proximo_passo=f"{comando} --fonte {primeira}",
+        detalhes={
+            "database_id": erro.database_id,
+            "data_sources": [{"id": fid, "nome": nome} for fid, nome in erro.fontes],
+        },
+    )
+
+
+def cmd_modelos(args: argparse.Namespace, *, client_factory: ClientFactory) -> Any:
+    """``modelos listar|preencher``: modelos nativos (templates) de um database.
+
+    A regra (vazio = "New page" sem corpo, idempotência, validação das colunas
+    antes de escrever) vive em ``notion_starter.services.modelos``.
+    """
+
+    servico = _servico_do_starter("modelos", comando="modelos")
+    from notion_starter.exceptions import FonteDeDadosIndefinidaError
+
+    database_id = _id_notion(args.database_id, "database_id")
+    fonte = _id_opcional(getattr(args, "fonte", None), "--fonte")
+    comando = f"notion-tasks modelos {args.acao_modelos} {database_id}"
+    try:
+        if args.acao_modelos == "listar":
+            modelos = servico.listar_modelos(
+                database_id, data_source_id=fonte, cliente=client_factory()
+            )
+            return {
+                "database_id": database_id,
+                "total": len(modelos),
+                "modelos": [m.para_dict() for m in modelos],
+                "aviso": AVISO_MODELOS,
+            }
+        itens = servico.carregar_manifesto(Path(_texto_obrigatorio(args.manifesto, "--manifesto")))
+        resultado = servico.preencher_modelos(
+            database_id,
+            itens,
+            data_source_id=fonte,
+            dry_run=getattr(args, "dry_run", False) is True,
+            cliente=client_factory(),
+        )
+    except servico.ManifestoInvalidoError as erro:
+        raise CLIError(
+            str(erro), codigo="validacao", detalhes={"problemas": list(erro.problemas)}
+        ) from erro
+    except FonteDeDadosIndefinidaError as erro:
+        raise _fonte_indefinida(erro, comando) from erro
+    dados = {"database_id": database_id, **resultado.para_dict(), "aviso": AVISO_MODELOS}
+    return dados
+
+
 def cmd_montar_estrutura_projeto(
     args: argparse.Namespace, *, client_factory: ClientFactory
 ) -> Any:
@@ -3293,6 +3371,13 @@ EXEMPLOS_GUIA: dict[str, list[str]] = {
     "inspecionar-estrutura": [
         "python -m cli --json inspecionar-estrutura <pagina_id>",
         "python -m cli --json inspecionar-estrutura <pagina_id> --profundidade 1",
+    ],
+    "modelos": [
+        "python -m cli --json modelos listar <database_id>",
+        "python -m cli --json modelos preencher <database_id> --manifesto modelos.json "
+        "--dry-run",
+        "python -m cli --json modelos preencher <database_id> --manifesto modelos.json "
+        "--fonte <data_source_id>",
     ],
     "copiar-corpo": [
         "python -m cli --json copiar-corpo <pagina_origem_id> <pagina_destino_id> --dry-run",
@@ -4079,6 +4164,33 @@ def construir_parser() -> argparse.ArgumentParser:
     clonar_estrutura.add_argument("pagina_referencia_id")
     clonar_estrutura.add_argument("pagina_destino_id")
 
+    modelos = sub.add_parser(
+        "modelos",
+        help="modelos nativos (templates) de um database: 'listar' e 'preencher' os "
+        "modelos vazios ('New page' sem corpo) com nome, colunas e corpo de um "
+        "manifesto JSON; a API não cria modelo nem define o padrão",
+    )
+    sub_modelos = modelos.add_subparsers(dest="acao_modelos", required=True)
+    modelos_listar = sub_modelos.add_parser("listar", help="lista os modelos do database")
+    modelos_preencher = sub_modelos.add_parser(
+        "preencher",
+        help="preenche os modelos vazios na ordem do manifesto (idempotente)",
+    )
+    for parser_modelos in (modelos_listar, modelos_preencher):
+        parser_modelos.add_argument("database_id")
+        parser_modelos.add_argument(
+            "--fonte", help="data source a usar quando o database tem mais de um"
+        )
+    modelos_preencher.add_argument(
+        "--manifesto",
+        required=True,
+        help='JSON: [{"nome", "arquivo" (Markdown, relativo ao manifesto) ou "copiar_de" '
+        '(página de origem do corpo), "propriedades": {"Coluna": "valor"}}]',
+    )
+    modelos_preencher.add_argument(
+        "--dry-run", action="store_true", help="só mostra qual modelo receberia cada item"
+    )
+
     copiar_corpo = sub.add_parser(
         "copiar-corpo",
         help="copia o corpo de uma página para o fim de outra BLOCO A BLOCO (tabela, "
@@ -4512,6 +4624,8 @@ def _despachar(
         dados = cmd_criar_subpagina(args, client_factory=client_factory)
     elif comando == "inspecionar-estrutura":
         dados = cmd_inspecionar_estrutura(args, client_factory=client_factory)
+    elif comando == "modelos":
+        dados = cmd_modelos(args, client_factory=client_factory)
     elif comando == "copiar-corpo":
         dados = cmd_copiar_corpo(args, client_factory=client_factory)
     elif comando == "clonar-estrutura":

@@ -87,7 +87,8 @@ notion-tasks-cli/
 - **Organizar o workspace** — `mover-pagina` move de verdade (endpoint `/move`),
   prevê as colunas que o Notion cria no destino e os valores que se perdem, e
   confere o pai relido; `copiar-corpo` copia o corpo de uma página para outra
-  bloco a bloco (tabela, checklist, colunas e menções preservados).
+  bloco a bloco (tabela, checklist, colunas e menções preservados); `modelos`
+  lista e preenche os modelos nativos de um database a partir de um manifesto.
 - **Conteúdo** — ler Markdown, escrever, substituir, editar ou apagar blocos.
 - **Estruturas** — clonar páginas e estruturas do Notion.
 - **Relatórios** — exportar relatórios diários para DOCX.
@@ -340,6 +341,10 @@ notion-tasks mover-pagina <page_id> <data_source_id> --tipo-pai data_source_id
 # Copiar o corpo bloco a bloco (sem passar por Markdown)
 notion-tasks copiar-corpo <origem_id> <destino_id> --dry-run
 notion-tasks copiar-corpo <origem_id> <destino_id> --so-se-vazio --conferir
+
+# Modelos nativos (templates) de um database
+notion-tasks modelos listar <database_id>
+notion-tasks modelos preencher <database_id> --manifesto modelos.json --dry-run
 ```
 
 O `PATCH /pages/{id}` com `parent`, que a versão anterior usava, responde 200 e
@@ -360,6 +365,27 @@ com o link e o bloco aparece em `degradados`. `--so-se-vazio` torna a cópia
 idempotente, `--conferir` relê o destino e compara a contagem por tipo, e
 destino com database só recebe com `--mesmo-com-database`. Numa falha no meio,
 o que foi criado volta para a lixeira (`escrita_parcial`).
+
+A API do Notion **lista** os modelos nativos de um database e aceita escrever
+propriedades e corpo num modelo que já existe, mas **não cria** modelo nem
+escolhe o padrão (medido em 2026-09-27). Por isso `modelos preencher` trabalha
+sobre modelos em branco: clique em "Novo modelo" no Notion quantas vezes
+precisar, sem digitar nada (cada um aparece como `New page`), e rode o comando.
+Cada item do manifesto ocupa um modelo vazio, na ordem; um modelo que já tem o
+nome e corpo é pulado, e um que tem o nome sem corpo é completado. As colunas
+são conferidas antes da primeira escrita. O manifesto é uma lista JSON:
+
+```json
+[
+  {"nome": "🎬 Roteiro de vídeo", "arquivo": "roteiro.md",
+   "propriedades": {"Etapa": "Ideia", "Formato": "Vídeo"}},
+  {"nome": "🧩 Artigo", "copiar_de": "<page_id_do_corpo_modelo>"}
+]
+```
+
+`arquivo` é Markdown relativo à pasta do manifesto; `copiar_de` copia o corpo de
+outra página bloco a bloco (bom para tabela e colunas). Os valores seguem o
+formato do `editar-linha`. Faltando modelos vazios, a saída diz quantos criar.
 
 ### Blocos: mover sem perder nada
 
