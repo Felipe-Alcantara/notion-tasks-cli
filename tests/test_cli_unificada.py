@@ -157,6 +157,38 @@ def test_binario_sai_quando_troca_windows_foi_agendada(monkeypatch):
     assert chamadas == []
 
 
+def test_binario_relanca_comando_depois_de_troca_posix(monkeypatch):
+    """Depois da troca em macOS/Linux o comando roda no executável novo."""
+
+    chamadas = []
+    relancamentos = []
+    monkeypatch.setattr(unificada.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        unificada.atualizacao_nativa,
+        "atualizar_automaticamente",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "status": "atualizado",
+            "aplicado": True,
+            "reiniciar": True,
+            "executavel": "/opt/notion-automacoes",
+        },
+    )
+    monkeypatch.setattr(
+        unificada.atualizacao_nativa,
+        "relancar_atualizado",
+        lambda executavel, argumentos: relancamentos.append((executavel, argumentos)) or 3,
+    )
+    monkeypatch.setattr(
+        "cli.notion_tasks.main",
+        lambda argumentos: chamadas.append(argumentos) or 0,
+    )
+
+    assert unificada.main(["tasks", "listar"]) == 3
+    assert relancamentos == [("/opt/notion-automacoes", ["tasks", "listar"])]
+    assert chamadas == []
+
+
 def test_update_do_binario_oferece_dry_run(monkeypatch, capsys):
     """A consulta manual pode ser feita sem alterar o arquivo atual."""
 

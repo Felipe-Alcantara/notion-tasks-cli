@@ -271,8 +271,77 @@ def test_atualizar_nativo_linux_baixa_valida_e_troca(tmp_path):
 
     assert resultado["status"] == "atualizado"
     assert resultado["aplicado"] is True
+    assert resultado["mensagem"] == "Atualizado de 0.3.0 para 0.4.0."
+    assert resultado["executavel"] == str(executavel.resolve())
     assert executavel.read_bytes() == binario
     assert Path(resultado["backup"]).read_bytes() == b"antigo"
+
+
+def test_auto_update_aplicado_pede_reinicio_do_comando(tmp_path):
+    """Troca em processo vivo não pode continuar importando do arquivo antigo."""
+
+    executavel = tmp_path / "notion-automacoes"
+    executavel.write_bytes(b"antigo")
+    binario = b"novo"
+    release = release_fake()
+    plano = updater.planejar_atualizacao("0.3.0", alvo="linux-x64", release=release).plano
+    assert plano is not None
+    opener = fazer_opener(
+        {
+            plano.url_checksum: hashlib.sha256(binario).hexdigest().encode(),
+            plano.url_binario: binario,
+        }
+    )
+
+    resultado = updater.atualizar_automaticamente(
+        "0.3.0",
+        executavel=executavel,
+        cache=tmp_path / "cache.json",
+        alvo="linux-x64",
+        release=release,
+        sistema="Linux",
+        opener=opener,
+    )
+
+    assert resultado["reiniciar"] is True
+    assert resultado["executavel"] == str(executavel.resolve())
+
+
+def test_auto_update_sem_troca_nao_pede_reinicio(tmp_path):
+    resultado = updater.atualizar_automaticamente(
+        "0.4.0",
+        cache=tmp_path / "cache.json",
+        alvo="linux-x64",
+        release=release_fake(versao="0.4.0"),
+    )
+
+    assert resultado["status"] == "atualizado"
+    assert resultado["reiniciar"] is False
+
+
+def test_relanca_executavel_novo_com_ambiente_pyinstaller_limpo(tmp_path, monkeypatch):
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", "/tmp/antigo")
+    chamadas = []
+
+    codigo = updater.relancar_atualizado(
+        tmp_path / "notion-automacoes",
+        ["tasks", "listar"],
+        runner=lambda comando, **kwargs: chamadas.append((comando, kwargs)) or 7,
+    )
+
+    assert codigo == 7
+    comando, kwargs = chamadas[0]
+    assert comando == [str(tmp_path / "notion-automacoes"), "tasks", "listar"]
+    assert kwargs["env"][updater.VARIAVEL_RESET_PYINSTALLER] == "1"
+    assert os.environ.get(updater.VARIAVEL_RESET_PYINSTALLER) is None
+
+
+def test_relancamento_que_falha_vira_erro_legivel(tmp_path):
+    def runner(*_args, **_kwargs):
+        raise FileNotFoundError("sumiu")
+
+    with pytest.raises(updater.AtualizacaoNativaError, match="não foi possível relançá-lo"):
+        updater.relancar_atualizado(tmp_path / "x", [], runner=runner)
 
 
 def test_auto_update_respeita_cache(tmp_path):

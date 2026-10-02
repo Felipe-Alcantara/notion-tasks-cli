@@ -1044,3 +1044,42 @@ biblioteca não conhecia `created_time`.
 
 **Validação.** `tests/test_cli_remover_coluna.py` (5 testes; os que dependem
 do starter novo pulam na CI). Nada foi escrito no Notion real.
+
+## [2026-10-02] Auto-update em macOS/Linux relança o comando no executável novo
+
+**Contexto.** A validação física do auto-update no Linux x64 (cópia isolada do
+asset `v0.4.1` publicado, `HOME`/`XDG_CACHE_HOME` temporários) mostrou que o
+`update` manual funciona — 0.4.1 → 0.5.0, SHA-256 igual ao `.sha256` da
+Release, modo `755` preservado, `.previous` = 0.4.1 —, mas o **auto-update
+disparado por comando comum** quebra o próprio comando: `auth listar` e
+`tasks opcoes` voltam `Error -3 while decompressing data: incorrect header
+check`, exit 2. A troca acontece com o processo antigo vivo; o executável
+onefile lê módulos do próprio arquivo sob demanda, e o import tardio de
+`_delegar_tasks`/`_delegar_auth` lê o arquivo novo com os offsets do antigo. O
+Windows não sofre disso porque troca num helper filho e relança.
+
+**Decisão.**
+
+- `atualizar_automaticamente` marca `reiniciar=True` quando a troca foi
+  aplicada no processo atual (`aplicado=True`); o `agendado` do Windows segue
+  com `reiniciar=False`, pois o helper já relança.
+- `relancar_atualizado` executa o binário novo com os mesmos argumentos e
+  `PYINSTALLER_RESET_ENVIRONMENT=1` (o bootloader novo extrai o próprio
+  conteúdo em vez de herdar a pasta do antigo) e repassa o código de saída.
+  `main` chama isso logo depois do auto-update, antes de qualquer import tardio.
+- O resultado aplicado passa a dizer `Atualizado de X para Y.` e expõe
+  `executavel`; antes repetia `A versão Y está disponível`.
+- O Windows não mudou: o helper validado em 21/09/2026 continua igual.
+
+**Validação.** 5 testes novos (`tests/test_atualizacao_nativa.py`,
+`tests/test_cli_unificada.py`); o de integração falha sem a mudança em
+`cli/unificada.py`. Gate: `ruff check .` limpo, `pytest` 370 passed. Binário
+construído localmente com `scripts/build_native.py --target linux-x64 --version
+v0.4.9` (PyInstaller 6.22.3): com cache limpo, `auth listar` atualiza para a
+`v0.5.0` publicada e responde `Nenhum perfil configurado.` com exit 0;
+`--json tasks opcoes` devolve o mesmo envelope que a 0.5.0 devolve direto; sem
+sobra de `/tmp/_MEI*`. Rollback validado pelas duas vias: restaurar
+`.previous` e baixar o asset da Release anterior. **Limite:** a correção só
+age no binário que está *sendo* atualizado — a 0.5.0 publicada ainda tem o
+defeito ao se atualizar para a próxima; o primeiro comando depois desse salto
+pode falhar uma vez (o update em si é aplicado). macOS não foi exercitado.

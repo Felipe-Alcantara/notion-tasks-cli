@@ -161,8 +161,9 @@ para a matriz de release, a política de perfis e os limites do primeiro release
 
 Em binários nativos, comandos normais verificam uma Release estável no máximo
 uma vez por 24 horas e fazem a troca com checksum; `update --dry-run` mostra o
-plano sem alterar o disco. `NOTION_AUTOMACOES_NO_UPDATE=1` desabilita a
-verificação automática. Em instalações Python o comando `update` continua
+plano sem alterar o disco. Em macOS/Linux, o comando que disparou a troca
+continua no executável novo, relançado com os mesmos argumentos.
+`NOTION_AUTOMACOES_NO_UPDATE=1` desabilita a verificação automática. Em instalações Python o comando `update` continua
 apenas mostrando o comando seguro de `pipx`, `uv` ou `pip`.
 
 O rollback de produto é manual: baixe na Release anterior o asset correspondente

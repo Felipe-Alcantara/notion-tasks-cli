@@ -465,6 +465,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         resultado_auto = _verificar_auto_update(args, argumentos)
         if resultado_auto and resultado_auto.get("status") == "agendado":
             return 0
+        if resultado_auto and resultado_auto.get("reiniciar"):
+            return atualizacao_nativa.relancar_atualizado(
+                resultado_auto.get("executavel") or sys.executable,
+                argumentos,
+            )
         if args.comando in {"tasks", "tarefas"}:
             return _delegar_tasks(args)
         if args.comando in {"auth", "perfis"}:

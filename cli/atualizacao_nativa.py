@@ -47,6 +47,9 @@ TTL_CACHE_VERIFICACAO = 24 * 60 * 60
 
 ARGUMENTO_APLICAR = "--__aplicar-atualizacao-nativa"
 ARQUIVO_CACHE = "verificacao-atualizacao.json"
+# Faz o bootloader do executável novo extrair o próprio conteúdo em vez de
+# herdar a pasta temporária do processo antigo (PyInstaller >= 6.10).
+VARIAVEL_RESET_PYINSTALLER = "PYINSTALLER_RESET_ENVIRONMENT"
 
 
 class AtualizacaoNativaError(RuntimeError):
@@ -514,6 +517,36 @@ def executar_troca_agendada(
     return 0
 
 
+def relancar_atualizado(
+    executavel: Path | str,
+    argumentos: Sequence[str],
+    *,
+    runner: Callable[..., Any] = subprocess.call,
+) -> int:
+    """Continua o comando original no executável recém-instalado.
+
+    Em macOS e Linux a troca acontece com o processo antigo ainda vivo. O
+    executável onefile lê módulos do próprio arquivo sob demanda; depois da
+    troca, um import tardio leria o arquivo novo com os offsets do antigo e
+    falharia com ``Error -3 while decompressing data``. Por isso o comando
+    roda num processo novo e o antigo só repassa o código de saída.
+    """
+
+    ambiente = dict(os.environ)
+    ambiente[VARIAVEL_RESET_PYINSTALLER] = "1"
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            fluxo.flush()
+        except (AttributeError, OSError, ValueError):
+            pass
+    try:
+        return int(runner([str(executavel), *argumentos], env=ambiente))
+    except OSError as exc:
+        raise AtualizacaoNativaError(
+            f"Binário atualizado, mas não foi possível relançá-lo: {exc}."
+        ) from exc
+
+
 def _serializar_planejamento(resultado: Planejamento) -> dict[str, Any]:
     dados: dict[str, Any] = {
         "ok": resultado.status not in {"asset_indisponivel", "alvo_nao_suportado"},
@@ -631,6 +664,11 @@ def atualizar_nativo(
                 "status": "atualizado",
                 "aplicado": True,
                 "backup": str(backup),
+                "executavel": str(caminho),
+                "mensagem": (
+                    f"Atualizado de {atual} para "
+                    f"{planejamento.plano.versao_disponivel}."
+                ),
             }
         )
         return dados
@@ -707,5 +745,7 @@ def atualizar_automaticamente(
             "mensagem": f"Atualização automática ignorada: {exc}",
         }
     _gravar_cache(caminho_cache_atual, str(dados.get("status", "desconhecido")))
-    dados.setdefault("reiniciar", False)
+    # Troca aplicada em processo vivo (macOS/Linux) exige continuar o comando
+    # no executável novo; no Windows o helper agendado já relança.
+    dados["reiniciar"] = bool(dados.get("aplicado"))
     return dados
