@@ -1,5 +1,12 @@
 # 🤖 notion-tasks-cli
 
+> [!IMPORTANT]
+> **Repositório legado.** Desde 07/10/2026 este código vive no monolito
+> [**Felixo-Notion-MCP**](https://github.com/Felipe-Alcantara/Felixo-Notion-MCP), com o
+> histórico preservado. Novas mudanças, issues e pull requests vão para lá. Este repositório
+> fica ativo só para a transição dos pacotes e binários publicados (etapa 4 do monolito) e
+> depois será arquivado.
+
 <div align="center">
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
